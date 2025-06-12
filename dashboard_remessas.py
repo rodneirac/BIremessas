@@ -59,17 +59,20 @@ if not df.empty:
     clientes = sorted(df["Cliente"].dropna().unique())
     meses = sorted(df["Mês"].dropna().unique())
 
-    base_sel = st.sidebar.multiselect("Filtrar por Base", bases, default=bases)
-    descricao_sel = st.sidebar.multiselect("Filtrar por Descrição", descricoes, default=descricoes)
-    cliente_sel = st.sidebar.multiselect("Filtrar por Cliente", clientes, default=clientes)
-    mes_sel = st.sidebar.multiselect("Filtrar por Mês", meses, default=meses)
+    base_sel = st.sidebar.selectbox("Selecionar Base", ["Todas"] + bases)
+    descricao_sel = st.sidebar.selectbox("Selecionar Descrição", ["Todas"] + descricoes)
+    cliente_sel = st.sidebar.selectbox("Selecionar Cliente", ["Todos"] + clientes)
+    mes_sel = st.sidebar.selectbox("Selecionar Mês", ["Todos"] + meses)
 
-    df_filtrado = df[
-        df["Base"].isin(base_sel) &
-        df["Descricao"].isin(descricao_sel) &
-        df["Cliente"].isin(cliente_sel) &
-        df["Mês"].isin(mes_sel)
-    ]
+    df_filtrado = df.copy()
+    if base_sel != "Todas":
+        df_filtrado = df_filtrado[df_filtrado["Base"] == base_sel]
+    if descricao_sel != "Todas":
+        df_filtrado = df_filtrado[df_filtrado["Descricao"] == descricao_sel]
+    if cliente_sel != "Todos":
+        df_filtrado = df_filtrado[df_filtrado["Cliente"] == cliente_sel]
+    if mes_sel != "Todos":
+        df_filtrado = df_filtrado[df_filtrado["Mês"] == mes_sel]
 
     # KPIs
     total_remessas = len(df_filtrado)
