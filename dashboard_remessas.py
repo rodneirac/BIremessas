@@ -1,4 +1,4 @@
-# 1. IMPORTS (SEMPRE NO TOPO)
+# 1. IMPORTS
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -71,12 +71,12 @@ df = load_data(URL_DADOS_REMESSAS)
 if not df.empty:
     st.sidebar.header("Filtros")
 
-    # --- Filtro de Base (Exemplo com a solução completa) ---
+    # --- Filtro de Base ---
     bases = sorted(df["Base"].dropna().unique())
     if 'base_selection' not in st.session_state:
-        st.session_state['base_selection'] = bases # Padrão: todos selecionados
+        st.session_state['base_selection'] = bases 
 
-    with st.sidebar.expander("✔️ Filtrar por Base", expanded=False):
+    with st.sidebar.expander("✔️ Filtrar por Base", expanded=True): # Deixando expandido por padrão
         col1, col2 = st.columns(2)
         if col1.button("Selecionar Todas", key='select_all_bases', use_container_width=True):
             st.session_state['base_selection'] = bases
@@ -91,37 +91,44 @@ if not df.empty:
         )
         st.session_state['base_selection'] = base_sel
 
-    # --- Filtros para as outras categorias (simplificado, aplique o padrão acima se desejar) ---
+    # --- Filtro de Descrição ---
     descricoes = sorted(df["Descricao"].dropna().unique())
-    clientes = sorted(df["Cliente"].dropna().unique())
-    meses = sorted(df["Mês"].dropna().unique(), reverse=True)
+    if 'desc_selection' not in st.session_state:
+        st.session_state['desc_selection'] = descricoes
 
-    with st.sidebar.expander("✔️ Filtrar por Descrição", expanded=False):
-        descricao_sel = st.multiselect("Descrições", descricoes, default=descricoes, label_visibility="collapsed")
-    with st.sidebar.expander("✔️ Filtrar por Cliente", expanded=False):
-        cliente_sel = st.multiselect("Clientes", clientes, default=clientes, label_visibility="collapsed")
-    with st.sidebar.expander("✔️ Filtrar por Mês", expanded=False):
-        mes_sel = st.multiselect("Meses", meses, default=meses, label_visibility="collapsed")
+    with st.sidebar.expander("✔️ Filtrar por Descrição", expanded=True): # Deixando expandido por padrão
+        col3, col4 = st.columns(2)
+        if col3.button("Selecionar Todas", key='select_all_desc', use_container_width=True):
+            st.session_state['desc_selection'] = descricoes
+            st.rerun()
+        if col4.button("Limpar Todas", key='clear_all_desc', use_container_width=True):
+            st.session_state['desc_selection'] = []
+            st.rerun()
 
+        descricao_sel = st.multiselect(
+            "Selecione as Descrições", options=descricoes, default=st.session_state['desc_selection'],
+            label_visibility="collapsed"
+        )
+        st.session_state['desc_selection'] = descricao_sel
+
+    # --- REMOVIDO: Filtros de Cliente e Mês ---
 
     # --- Filtragem do DataFrame ---
     df_filtrado = df[
         df["Base"].isin(st.session_state['base_selection']) &
-        df["Descricao"].isin(descricao_sel) &
-        df["Cliente"].isin(cliente_sel) &
-        df["Mês"].isin(mes_sel)
+        df["Descricao"].isin(st.session_state['desc_selection'])
     ]
 
-    # --- KPIs e Gráficos ---
+    # --- KPIs e Gráficos (nenhuma alteração necessária aqui) ---
     total_remessas = len(df_filtrado)
     valor_total = df_filtrado["Valor"].sum()
     valor_medio = df_filtrado["Valor"].mean() if total_remessas > 0 else 0
 
     st.markdown("### Indicadores Gerais")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Qtde. Remessas", f"{total_remessas:n}")
-    col2.metric("Valor Total (R$)", locale.format_string('%.2f', valor_total, grouping=True))
-    col3.metric("Valor Médio (R$)", locale.format_string('%.2f', valor_medio, grouping=True))
+    kpi_cols = st.columns(3)
+    kpi_cols[0].metric("Qtde. Remessas", f"{total_remessas:n}")
+    kpi_cols[1].metric("Valor Total (R$)", locale.format_string('%.2f', valor_total, grouping=True))
+    kpi_cols[2].metric("Valor Médio (R$)", locale.format_string('%.2f', valor_medio, grouping=True))
 
     st.markdown("---")
     st.subheader("Evolução de Valores por Mês")
