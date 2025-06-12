@@ -53,7 +53,7 @@ def load_data(url):
             return pd.DataFrame()
         df["Data Ocorrencia"] = pd.to_datetime(df["Data Ocorrencia"], errors="coerce")
         df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
-        df.dropna(subset=["Data Ocorrencia", "Valor"], inplace=True)
+        df.dropna(subset=["Data Ocorrencia", "Valor", "Cliente"], inplace=True) # Garantir que cliente não seja nulo
         df["Mês"] = df["Data Ocorrencia"].dt.to_period("M").astype(str)
         return df
     except Exception as e:
@@ -152,24 +152,46 @@ if not df.empty:
     
     st.markdown("---")
 
-    # --- NOVA SEÇÃO: GRÁFICO DE BARRAS POR BASE ---
     st.subheader("Valor Total por Base")
     agrupado_base = df_filtrado.groupby("Base").agg({"Valor": "sum"}).reset_index().sort_values("Valor", ascending=False)
 
     fig_base = px.bar(
-        agrupado_base,
-        x="Base",
-        y="Valor",
-        title="Faturamento por Base",
-        text_auto='.2s',
-        color_discrete_sequence=['#2ca02c'] * len(agrupado_base) # Define a cor verde
+        agrupado_base, x="Base", y="Valor", title="Faturamento por Base",
+        text_auto='.2s', color_discrete_sequence=['#2ca02c'] * len(agrupado_base)
     )
-    fig_base.update_layout(xaxis={'categoryorder':'total descending'}) # Ordena as barras da maior para a menor
+    fig_base.update_layout(xaxis={'categoryorder':'total descending'})
     st.plotly_chart(fig_base, use_container_width=True)
 
+    # --- MODIFICAÇÃO: RESUMO POR CLIENTE NOS DADOS DETALHADOS ---
+    with st.expander("Ver resumo por cliente"):
+        st.markdown("#### Somatório por Cliente (com base nos filtros aplicados)")
+        
+        # 1. Agrupar por cliente, somar o valor e contar as remessas
+        resumo_cliente = df_filtrado.groupby("Cliente").agg(
+            Valor_Total=('Valor', 'sum'),
+            Qtde_Remessas=('Base', 'count')
+        ).reset_index()
+        
+        # 2. Ordenar para mostrar os maiores clientes primeiro
+        resumo_cliente = resumo_cliente.sort_values("Valor_Total", ascending=False)
 
-    with st.expander("Ver dados detalhados"):
-        st.dataframe(df_filtrado)
+        # 3. Exibir a tabela com formatação
+        st.dataframe(
+            resumo_cliente,
+            column_config={
+                "Cliente": st.column_config.TextColumn("Cliente"),
+                "Valor_Total": st.column_config.NumberColumn(
+                    "Valor Total (R$)",
+                    format="R$ %.2f"
+                ),
+                "Qtde_Remessas": st.column_config.NumberColumn(
+                    "Qtde. Remessas",
+                    format="%d"
+                )
+            },
+            use_container_width=True,
+            hide_index=True
+        )
 
 else:
     st.warning("Não há dados disponíveis para exibição ou ocorreu um erro no carregamento.")
