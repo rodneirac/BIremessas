@@ -53,7 +53,7 @@ def load_data(url):
             return pd.DataFrame()
         df["Data Ocorrencia"] = pd.to_datetime(df["Data Ocorrencia"], errors="coerce")
         df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
-        df.dropna(subset=["Data Ocorrencia", "Valor", "Cliente"], inplace=True) # Garantir que cliente não seja nulo
+        df.dropna(subset=["Data Ocorrencia", "Valor", "Cliente"], inplace=True)
         df["Mês"] = df["Data Ocorrencia"].dt.to_period("M").astype(str)
         return df
     except Exception as e:
@@ -162,33 +162,28 @@ if not df.empty:
     fig_base.update_layout(xaxis={'categoryorder':'total descending'})
     st.plotly_chart(fig_base, use_container_width=True)
 
-    # --- MODIFICAÇÃO: RESUMO POR CLIENTE NOS DADOS DETALHADOS ---
+    # --- MODIFICAÇÃO: APLICANDO FORMATAÇÃO DE MILHARES NA TABELA ---
     with st.expander("Ver resumo por cliente"):
         st.markdown("#### Somatório por Cliente (com base nos filtros aplicados)")
         
-        # 1. Agrupar por cliente, somar o valor e contar as remessas
         resumo_cliente = df_filtrado.groupby("Cliente").agg(
             Valor_Total=('Valor', 'sum'),
             Qtde_Remessas=('Base', 'count')
         ).reset_index()
         
-        # 2. Ordenar para mostrar os maiores clientes primeiro
         resumo_cliente = resumo_cliente.sort_values("Valor_Total", ascending=False)
 
-        # 3. Exibir a tabela com formatação
+        # --- NOVA ETAPA: Aplicar a formatação de string nas colunas numéricas ---
+        resumo_cliente['Valor_Total'] = resumo_cliente['Valor_Total'].apply(
+            lambda x: locale.format_string('R$ %.2f', x, grouping=True)
+        )
+        resumo_cliente['Qtde_Remessas'] = resumo_cliente['Qtde_Remessas'].apply(
+            lambda x: locale.format_string('%d', x, grouping=True)
+        )
+
+        # Exibir a tabela, agora com colunas de texto já formatadas
         st.dataframe(
             resumo_cliente,
-            column_config={
-                "Cliente": st.column_config.TextColumn("Cliente"),
-                "Valor_Total": st.column_config.NumberColumn(
-                    "Valor Total (R$)",
-                    format="R$ %.2f"
-                ),
-                "Qtde_Remessas": st.column_config.NumberColumn(
-                    "Qtde. Remessas",
-                    format="%d"
-                )
-            },
             use_container_width=True,
             hide_index=True
         )
