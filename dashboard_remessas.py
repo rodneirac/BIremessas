@@ -73,10 +73,11 @@ if not df.empty:
 
     # --- Filtro de Base ---
     bases = sorted(df["Base"].dropna().unique())
+    # MUDANÇA 1: Inicializar a seleção como uma lista vazia
     if 'base_selection' not in st.session_state:
-        st.session_state['base_selection'] = bases 
+        st.session_state['base_selection'] = [] 
 
-    with st.sidebar.expander("✔️ Filtrar por Base", expanded=True): # Deixando expandido por padrão
+    with st.sidebar.expander("✔️ Filtrar por Base", expanded=True):
         col1, col2 = st.columns(2)
         if col1.button("Selecionar Todas", key='select_all_bases', use_container_width=True):
             st.session_state['base_selection'] = bases
@@ -93,10 +94,11 @@ if not df.empty:
 
     # --- Filtro de Descrição ---
     descricoes = sorted(df["Descricao"].dropna().unique())
+    # MUDANÇA 1: Inicializar a seleção como uma lista vazia
     if 'desc_selection' not in st.session_state:
-        st.session_state['desc_selection'] = descricoes
+        st.session_state['desc_selection'] = []
 
-    with st.sidebar.expander("✔️ Filtrar por Descrição", expanded=True): # Deixando expandido por padrão
+    with st.sidebar.expander("✔️ Filtrar por Descrição", expanded=True):
         col3, col4 = st.columns(2)
         if col3.button("Selecionar Todas", key='select_all_desc', use_container_width=True):
             st.session_state['desc_selection'] = descricoes
@@ -111,13 +113,17 @@ if not df.empty:
         )
         st.session_state['desc_selection'] = descricao_sel
 
-    # --- REMOVIDO: Filtros de Cliente e Mês ---
-
-    # --- Filtragem do DataFrame ---
-    df_filtrado = df[
-        df["Base"].isin(st.session_state['base_selection']) &
-        df["Descricao"].isin(st.session_state['desc_selection'])
-    ]
+    # --- MUDANÇA 2: Lógica de filtragem ajustada ---
+    # Se a lista de seleção estiver vazia, o filtro para aquela categoria não é aplicado (mostra tudo).
+    # Caso contrário, aplica o filtro normalmente com os itens selecionados.
+    
+    df_filtrado = df.copy() # Começa com uma cópia do dataframe original
+    
+    if st.session_state['base_selection']:
+        df_filtrado = df_filtrado[df_filtrado['Base'].isin(st.session_state['base_selection'])]
+        
+    if st.session_state['desc_selection']:
+        df_filtrado = df_filtrado[df_filtrado['Descricao'].isin(st.session_state['desc_selection'])]
 
     # --- KPIs e Gráficos (nenhuma alteração necessária aqui) ---
     total_remessas = len(df_filtrado)
