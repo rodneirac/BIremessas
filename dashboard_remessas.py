@@ -124,7 +124,6 @@ if not df.empty:
 
     st.markdown("---")
     
-    # --- NOVA SEÇÃO: GRÁFICOS LADO A LADO ---
     chart_col1, chart_col2 = st.columns(2)
 
     with chart_col1:
@@ -138,8 +137,6 @@ if not df.empty:
     with chart_col2:
         st.subheader("Distribuição por Descrição")
         agrupado_desc = df_filtrado.groupby("Descricao").agg({"Valor": "sum"}).reset_index()
-        # Para o gráfico de pizza não ficar poluído, podemos mostrar apenas os X maiores
-        # e agrupar o resto em "Outros". Aqui, vamos mostrar os 10 maiores.
         top_n = 10
         if len(agrupado_desc) > top_n:
             agrupado_desc = agrupado_desc.sort_values("Valor", ascending=False)
@@ -149,10 +146,26 @@ if not df.empty:
             })
             agrupado_desc = pd.concat([agrupado_desc.iloc[:top_n], outros], ignore_index=True)
 
-        fig_pie = px.pie(agrupado_desc, names="Descricao", values="Valor",
-                         hole=.3) # O parâmetro 'hole' cria um gráfico de rosca (donut chart), mais moderno
+        fig_pie = px.pie(agrupado_desc, names="Descricao", values="Valor", hole=.3)
         fig_pie.update_traces(textposition='inside', textinfo='percent+label')
         st.plotly_chart(fig_pie, use_container_width=True)
+    
+    st.markdown("---")
+
+    # --- NOVA SEÇÃO: GRÁFICO DE BARRAS POR BASE ---
+    st.subheader("Valor Total por Base")
+    agrupado_base = df_filtrado.groupby("Base").agg({"Valor": "sum"}).reset_index().sort_values("Valor", ascending=False)
+
+    fig_base = px.bar(
+        agrupado_base,
+        x="Base",
+        y="Valor",
+        title="Faturamento por Base",
+        text_auto='.2s',
+        color_discrete_sequence=['#2ca02c'] * len(agrupado_base) # Define a cor verde
+    )
+    fig_base.update_layout(xaxis={'categoryorder':'total descending'}) # Ordena as barras da maior para a menor
+    st.plotly_chart(fig_base, use_container_width=True)
 
 
     with st.expander("Ver dados detalhados"):
