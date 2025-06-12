@@ -35,8 +35,7 @@ def get_latest_update_info(owner, repo, file_path):
             local_date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
             return f"**{local_date.astimezone().strftime('%d/%m/%Y às %H:%M')}**"
         return "Data não disponível."
-    except requests.exceptions.RequestException as e:
-        st.warning(f"Não foi possível buscar a data de atualização: {e}")
+    except requests.exceptions.RequestException:
         return "Erro ao obter data."
 
 @st.cache_data
@@ -71,11 +70,9 @@ df = load_data(URL_DADOS_REMESSAS)
 if not df.empty:
     st.sidebar.header("Filtros")
 
-    # --- Filtro de Base ---
     bases = sorted(df["Base"].dropna().unique())
-    # MUDANÇA 1: Inicializar a seleção como uma lista vazia
     if 'base_selection' not in st.session_state:
-        st.session_state['base_selection'] = [] 
+        st.session_state['base_selection'] = []
 
     with st.sidebar.expander("✔️ Filtrar por Base", expanded=True):
         col1, col2 = st.columns(2)
@@ -85,16 +82,13 @@ if not df.empty:
         if col2.button("Limpar Todas", key='clear_all_bases', use_container_width=True):
             st.session_state['base_selection'] = []
             st.rerun()
-        
         base_sel = st.multiselect(
             "Selecione as Bases", options=bases, default=st.session_state['base_selection'],
             label_visibility="collapsed"
         )
         st.session_state['base_selection'] = base_sel
 
-    # --- Filtro de Descrição ---
     descricoes = sorted(df["Descricao"].dropna().unique())
-    # MUDANÇA 1: Inicializar a seleção como uma lista vazia
     if 'desc_selection' not in st.session_state:
         st.session_state['desc_selection'] = []
 
@@ -106,26 +100,18 @@ if not df.empty:
         if col4.button("Limpar Todas", key='clear_all_desc', use_container_width=True):
             st.session_state['desc_selection'] = []
             st.rerun()
-
         descricao_sel = st.multiselect(
             "Selecione as Descrições", options=descricoes, default=st.session_state['desc_selection'],
             label_visibility="collapsed"
         )
         st.session_state['desc_selection'] = descricao_sel
 
-    # --- MUDANÇA 2: Lógica de filtragem ajustada ---
-    # Se a lista de seleção estiver vazia, o filtro para aquela categoria não é aplicado (mostra tudo).
-    # Caso contrário, aplica o filtro normalmente com os itens selecionados.
-    
-    df_filtrado = df.copy() # Começa com uma cópia do dataframe original
-    
+    df_filtrado = df.copy()
     if st.session_state['base_selection']:
         df_filtrado = df_filtrado[df_filtrado['Base'].isin(st.session_state['base_selection'])]
-        
     if st.session_state['desc_selection']:
         df_filtrado = df_filtrado[df_filtrado['Descricao'].isin(st.session_state['desc_selection'])]
 
-    # --- KPIs e Gráficos (nenhuma alteração necessária aqui) ---
     total_remessas = len(df_filtrado)
     valor_total = df_filtrado["Valor"].sum()
     valor_medio = df_filtrado["Valor"].mean() if total_remessas > 0 else 0
@@ -137,13 +123,38 @@ if not df.empty:
     kpi_cols[2].metric("Valor Médio (R$)", locale.format_string('%.2f', valor_medio, grouping=True))
 
     st.markdown("---")
-    st.subheader("Evolução de Valores por Mês")
-    agrupado = df_filtrado.groupby("Mês").agg({"Valor": "sum"}).reset_index().sort_values("Mês")
-    fig = px.bar(agrupado, x="Mês", y="Valor", text_auto='.2s',
-                 title="Valor Total por Mês", labels={"Valor": "Valor (R$)", "Mês": "Mês de Referência"})
-    fig.update_traces(textposition="outside")
-    st.plotly_chart(fig, use_container_width=True)
     
+    # --- NOVA SEÇÃO: GRÁFICOS LADO A LADO ---
+    chart_col1, chart_col2 = st.columns(2)
+
+    with chart_col1:
+        st.subheader("Evolução de Valores por Mês")
+        agrupado_mes = df_filtrado.groupby("Mês").agg({"Valor": "sum"}).reset_index().sort_values("Mês")
+        fig_bar = px.bar(agrupado_mes, x="Mês", y="Valor", text_auto='.2s',
+                     labels={"Valor": "Valor (R$)", "Mês": "Mês de Referência"})
+        fig_bar.update_traces(textposition="outside")
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+    with chart_col2:
+        st.subheader("Distribuição por Descrição")
+        agrupado_desc = df_filtrado.groupby("Descricao").agg({"Valor": "sum"}).reset_index()
+        # Para o gráfico de pizza não ficar poluído, podemos mostrar apenas os X maiores
+        # e agrupar o resto em "Outros". Aqui, vamos mostrar os 10 maiores.
+        top_n = 10
+        if len(agrupado_desc) > top_n:
+            agrupado_desc = agrupado_desc.sort_values("Valor", ascending=False)
+            outros = pd.DataFrame({
+                'Descricao': ['Outros'],
+                'Valor': [agrupado_desc.iloc[top_n:]['Valor'].sum()]
+            })
+            agrupado_desc = pd.concat([agrupado_desc.iloc[:top_n], outros], ignore_index=True)
+
+        fig_pie = px.pie(agrupado_desc, names="Descricao", values="Valor",
+                         hole=.3) # O parâmetro 'hole' cria um gráfico de rosca (donut chart), mais moderno
+        fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+
     with st.expander("Ver dados detalhados"):
         st.dataframe(df_filtrado)
 
