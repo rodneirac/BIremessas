@@ -4,15 +4,18 @@ import plotly.express as px
 from datetime import datetime
 import requests
 from io import BytesIO
-import locale # Importa o módulo locale
+import locale
+
+# --- CONFIGURAÇÃO DA PÁGINA ---
+# ESTA LINHA DEVE SER O PRIMEIRO COMANDO STREAMLIT DO SCRIPT.
+st.set_page_config(layout="wide")
 
 # --- CONFIGURAÇÃO DA LOCALIDADE PARA FORMATAÇÃO PT-BR ---
-# Define a localidade para português do Brasil para formatar números com '.' e ',' corretamente.
-# Isso garante que a formatação monetária seja robusta.
+# Tenta definir a localidade. Se falhar, exibe um aviso.
 try:
     locale.setlocale(locale.LC_ALL, 'pt_BR.UTF-8')
 except locale.Error:
-    st.warning("Localidade 'pt_BR.UTF-8' não encontrada. Usando formatação padrão.")
+    st.warning("Localidade 'pt_BR.UTF-8' não encontrada. A formatação de números pode não ser a ideal. Para corrigir em deploy, adicione 'locales-all' ao seu arquivo packages.txt.")
 
 # --- URLs E CONSTANTES DO GITHUB ---
 ARQUIVO_DADOS_REMESSAS = "DADOSREMESSA.XLSX"
@@ -28,16 +31,13 @@ def get_latest_update_info(owner, repo, file_path):
     api_url = f"https://api.github.com/repos/{owner}/{repo}/commits?path={file_path}&page=1&per_page=1"
     try:
         response = requests.get(api_url)
-        response.raise_for_status()  # Lança um erro para status HTTP 4xx/5xx
+        response.raise_for_status()
         commit_data = response.json()
         if commit_data:
             date_str = commit_data[0]['commit']['committer']['date']
             local_date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-            # Retorna a data formatada e em negrito (markdown)
             return f"**{local_date.astimezone().strftime('%d/%m/%Y às %H:%M')}**"
-        # Se não houver commits para o arquivo, retorna a mensagem apropriada.
         return "Data não disponível."
-    # Captura exceções específicas de requisição (ex: falha de rede, erro de DNS)
     except requests.exceptions.RequestException as e:
         st.warning(f"Não foi possível buscar a data de atualização: {e}")
         return "Erro ao obter data."
@@ -50,7 +50,6 @@ def load_data(url):
         response.raise_for_status()
         df = pd.read_excel(BytesIO(response.content), engine="openpyxl", skiprows=3)
         
-        # Renomeação das colunas de forma mais segura, verificando o número de colunas
         colunas_esperadas = ["Base", "Ignorar", "Descricao", "Data Ocorrencia", "Valor", "Cliente", "Cond Pagto SAP", "Dia Corte Fat"]
         if len(df.columns) == len(colunas_esperadas):
             df.columns = colunas_esperadas
@@ -59,10 +58,9 @@ def load_data(url):
             st.error("O número de colunas no arquivo Excel não corresponde ao esperado.")
             return pd.DataFrame()
         
-        # Conversão de tipos e criação da coluna 'Mês'
         df["Data Ocorrencia"] = pd.to_datetime(df["Data Ocorrencia"], errors="coerce")
         df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
-        df.dropna(subset=["Data Ocorrencia", "Valor"], inplace=True) # Remove linhas onde a conversão falhou
+        df.dropna(subset=["Data Ocorrencia", "Valor"], inplace=True)
         df["Mês"] = df["Data Ocorrencia"].dt.to_period("M").astype(str)
         return df
     except Exception as e:
@@ -70,7 +68,6 @@ def load_data(url):
         return pd.DataFrame()
 
 # --- INTERFACE ---
-st.set_page_config(layout="wide") # Opcional: usar a largura total da página
 st.image(LOGO_URL, width=200)
 st.title("Dashboard Remessas a Faturar")
 st.caption(f"Dados atualizados em: {get_latest_update_info(OWNER, REPO, ARQUIVO_DADOS_REMESSAS)}")
@@ -83,9 +80,8 @@ if not df.empty:
     bases = sorted(df["Base"].dropna().unique())
     descricoes = sorted(df["Descricao"].dropna().unique())
     clientes = sorted(df["Cliente"].dropna().unique())
-    meses = sorted(df["Mês"].dropna().unique(), reverse=True) # Meses mais recentes primeiro
+    meses = sorted(df["Mês"].dropna().unique(), reverse=True)
 
-    # Filtros com valores padrão selecionados
     base_sel = st.sidebar.multiselect("Filtrar por Base", bases, default=bases)
     descricao_sel = st.sidebar.multiselect("Filtrar por Descrição", descricoes, default=descricoes)
     cliente_sel = st.sidebar.multiselect("Filtrar por Cliente", clientes, default=clientes)
@@ -98,7 +94,6 @@ if not df.empty:
         df["Mês"].isin(mes_sel)
     ]
 
-    # KPIs
     total_remessas = len(df_filtrado)
     valor_total = df_filtrado["Valor"].sum()
     valor_medio = df_filtrado["Valor"].mean() if total_remessas > 0 else 0
@@ -106,7 +101,6 @@ if not df.empty:
     st.markdown("### Indicadores Gerais")
     col1, col2, col3 = st.columns(3)
     
-    # Formatação de números usando o módulo locale (mais robusto e limpo)
     col1.metric("Qtde. Remessas", f"{total_remessas:n}")
     col2.metric("Valor Total (R$)", locale.format_string('%.2f', valor_total, grouping=True))
     col3.metric("Valor Médio (R$)", locale.format_string('%.2f', valor_medio, grouping=True))
@@ -120,7 +114,6 @@ if not df.empty:
     fig.update_traces(textposition="outside")
     st.plotly_chart(fig, use_container_width=True)
     
-    # Opcional: Exibir tabela com dados filtrados
     with st.expander("Ver dados detalhados"):
         st.dataframe(df_filtrado)
 
