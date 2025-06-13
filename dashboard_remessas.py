@@ -20,26 +20,37 @@ ARQUIVO_DADOS_REMESSAS = "DADOSREMESSA.XLSX"
 OWNER = "rodneirac"
 REPO = "BIremessas"
 
-URL_DADOS_REMESSAS = f"https://raw.githubusercontent.com/{OWNER}/{REPO}/main/{ARQUIVO_DADOS_REMESSAS}"
+# URL base para a API do GitHub, não para o arquivo raw diretamente
 LOGO_URL = f"https://raw.githubusercontent.com/{OWNER}/{REPO}/main/logo.png"
 
-@st.cache_data(ttl=3600)
-def get_latest_update_info(owner, repo, file_path):
+# MODIFICADO: A função agora retorna a data e o SHA do commit
+@st.cache_data(ttl=300) # Reduzido o cache para 5 minutos para checar atualizações mais rápido
+def get_latest_commit_info(owner, repo, file_path):
     api_url = f"https://api.github.com/repos/{owner}/{repo}/commits?path={file_path}&page=1&per_page=1"
     try:
         response = requests.get(api_url)
         response.raise_for_status()
         commit_data = response.json()
         if commit_data:
+            commit_sha = commit_data[0]['sha']
             date_str = commit_data[0]['commit']['committer']['date']
             local_date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-            return f"**{local_date.astimezone().strftime('%d/%m/%Y às %H:%M')}**"
-        return "Data não disponível."
+            formatted_date = f"**{local_date.astimezone().strftime('%d/%m/%Y às %H:%M')}**"
+            return formatted_date, commit_sha
     except requests.exceptions.RequestException:
-        return "Erro ao obter data."
+        return "Erro ao obter data.", None
+    return "Data não disponível.", None
 
+# MODIFICADO: A função agora depende do commit_sha para o cache funcionar corretamente
 @st.cache_data
-def load_data(url):
+def load_data(owner, repo, file_path, commit_sha):
+    if not commit_sha:
+        st.error("Não foi possível obter a versão do arquivo do GitHub.")
+        return pd.DataFrame()
+
+    # URL que aponta para a versão exata do arquivo, ignorando o cache da CDN
+    url = f"https://raw.githubusercontent.com/{owner}/{repo}/{commit_sha}/{file_path}"
+    
     try:
         response = requests.get(url)
         response.raise_for_status()
@@ -63,10 +74,17 @@ def load_data(url):
 # 4. LÓGICA PRINCIPAL E CONSTRUÇÃO DA INTERFACE
 st.image(LOGO_URL, width=200)
 st.title("Dashboard Remessas a Faturar")
-st.caption(f"Dados atualizados em: {get_latest_update_info(OWNER, REPO, ARQUIVO_DADOS_REMESSAS)}")
 
-df = load_data(URL_DADOS_REMESSAS)
+# --- NOVA LÓGICA DE CARREGAMENTO ---
+# 1. Obter as informações do último commit
+update_date, latest_commit_sha = get_latest_commit_info(OWNER, REPO, ARQUIVO_DADOS_REMESSAS)
+st.caption(f"Dados atualizados em: {update_date}")
 
+# 2. Carregar os dados usando o SHA do commit
+# O cache do Streamlit só será usado se o latest_commit_sha não tiver mudado
+df = load_data(OWNER, REPO, ARQUIVO_DADOS_REMESSAS, latest_commit_sha)
+
+# O resto do seu código continua exatamente o mesmo...
 if not df.empty:
     st.sidebar.header("Filtros")
 
@@ -162,7 +180,6 @@ if not df.empty:
     fig_base.update_layout(xaxis={'categoryorder':'total descending'})
     st.plotly_chart(fig_base, use_container_width=True)
 
-    # --- MODIFICAÇÃO: APLICANDO FORMATAÇÃO DE MILHARES NA TABELA ---
     with st.expander("Ver resumo por cliente"):
         st.markdown("#### Somatório por Cliente (com base nos filtros aplicados)")
         
@@ -173,7 +190,6 @@ if not df.empty:
         
         resumo_cliente = resumo_cliente.sort_values("Valor_Total", ascending=False)
 
-        # --- NOVA ETAPA: Aplicar a formatação de string nas colunas numéricas ---
         resumo_cliente['Valor_Total'] = resumo_cliente['Valor_Total'].apply(
             lambda x: locale.format_string('R$ %.2f', x, grouping=True)
         )
@@ -181,7 +197,6 @@ if not df.empty:
             lambda x: locale.format_string('%d', x, grouping=True)
         )
 
-        # Exibir a tabela, agora com colunas de texto já formatadas
         st.dataframe(
             resumo_cliente,
             use_container_width=True,
