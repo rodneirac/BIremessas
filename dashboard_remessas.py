@@ -20,11 +20,9 @@ ARQUIVO_DADOS_REMESSAS = "DADOSREMESSA.XLSX"
 OWNER = "rodneirac"
 REPO = "BIremessas"
 
-# URL base para a API do GitHub, não para o arquivo raw diretamente
 LOGO_URL = f"https://raw.githubusercontent.com/{OWNER}/{REPO}/main/logo.png"
 
-# MODIFICADO: A função agora retorna a data e o SHA do commit
-@st.cache_data(ttl=300) # Reduzido o cache para 5 minutos para checar atualizações mais rápido
+@st.cache_data(ttl=300)
 def get_latest_commit_info(owner, repo, file_path):
     api_url = f"https://api.github.com/repos/{owner}/{repo}/commits?path={file_path}&page=1&per_page=1"
     try:
@@ -41,14 +39,12 @@ def get_latest_commit_info(owner, repo, file_path):
         return "Erro ao obter data.", None
     return "Data não disponível.", None
 
-# MODIFICADO: A função agora depende do commit_sha para o cache funcionar corretamente
 @st.cache_data
 def load_data(owner, repo, file_path, commit_sha):
     if not commit_sha:
         st.error("Não foi possível obter a versão do arquivo do GitHub.")
         return pd.DataFrame()
 
-    # URL que aponta para a versão exata do arquivo, ignorando o cache da CDN
     url = f"https://raw.githubusercontent.com/{owner}/{repo}/{commit_sha}/{file_path}"
     
     try:
@@ -75,19 +71,15 @@ def load_data(owner, repo, file_path, commit_sha):
 st.image(LOGO_URL, width=200)
 st.title("Dashboard Remessas a Faturar")
 
-# --- NOVA LÓGICA DE CARREGAMENTO ---
-# 1. Obter as informações do último commit
 update_date, latest_commit_sha = get_latest_commit_info(OWNER, REPO, ARQUIVO_DADOS_REMESSAS)
 st.caption(f"Dados atualizados em: {update_date}")
 
-# 2. Carregar os dados usando o SHA do commit
-# O cache do Streamlit só será usado se o latest_commit_sha não tiver mudado
 df = load_data(OWNER, REPO, ARQUIVO_DADOS_REMESSAS, latest_commit_sha)
 
-# O resto do seu código continua exatamente o mesmo...
 if not df.empty:
     st.sidebar.header("Filtros")
 
+    # Filtro por Base
     bases = sorted(df["Base"].dropna().unique())
     if 'base_selection' not in st.session_state:
         st.session_state['base_selection'] = []
@@ -106,6 +98,7 @@ if not df.empty:
         )
         st.session_state['base_selection'] = base_sel
 
+    # Filtro por Descrição
     descricoes = sorted(df["Descricao"].dropna().unique())
     if 'desc_selection' not in st.session_state:
         st.session_state['desc_selection'] = []
@@ -123,12 +116,36 @@ if not df.empty:
             label_visibility="collapsed"
         )
         st.session_state['desc_selection'] = descricao_sel
+    
+    # --- NOVO FILTRO DE MÊS ---
+    meses = sorted(df["Mês"].dropna().unique(), reverse=True) # Ordena do mais recente para o mais antigo
+    if 'mes_selection' not in st.session_state:
+        st.session_state['mes_selection'] = []
 
+    with st.sidebar.expander("✔️ Filtrar por Mês", expanded=True):
+        col5, col6 = st.columns(2)
+        if col5.button("Selecionar Todos", key='select_all_meses', use_container_width=True):
+            st.session_state['mes_selection'] = meses
+            st.rerun()
+        if col6.button("Limpar Todos", key='clear_all_meses', use_container_width=True):
+            st.session_state['mes_selection'] = []
+            st.rerun()
+        mes_sel = st.multiselect(
+            "Selecione os Meses", options=meses, default=st.session_state['mes_selection'],
+            label_visibility="collapsed"
+        )
+        st.session_state['mes_selection'] = mes_sel
+
+    # --- LÓGICA DE FILTRAGEM ATUALIZADA ---
     df_filtrado = df.copy()
     if st.session_state['base_selection']:
         df_filtrado = df_filtrado[df_filtrado['Base'].isin(st.session_state['base_selection'])]
     if st.session_state['desc_selection']:
         df_filtrado = df_filtrado[df_filtrado['Descricao'].isin(st.session_state['desc_selection'])]
+    # --- APLICANDO O NOVO FILTRO DE MÊS ---
+    if st.session_state['mes_selection']:
+        df_filtrado = df_filtrado[df_filtrado['Mês'].isin(st.session_state['mes_selection'])]
+
 
     total_remessas = len(df_filtrado)
     valor_total = df_filtrado["Valor"].sum()
