@@ -20,9 +20,11 @@ ARQUIVO_DADOS_REMESSAS = "DADOSREMESSA.XLSX"
 OWNER = "rodneirac"
 REPO = "BIremessas"
 
+# URL base para a API do GitHub, não para o arquivo raw diretamente
 LOGO_URL = f"https://raw.githubusercontent.com/{OWNER}/{REPO}/main/logo.png"
 
-@st.cache_data(ttl=300)
+# MODIFICADO: A função agora retorna a data e o SHA do commit
+@st.cache_data(ttl=300) # Reduzido o cache para 5 minutos para checar atualizações mais rápido
 def get_latest_commit_info(owner, repo, file_path):
     api_url = f"https://api.github.com/repos/{owner}/{repo}/commits?path={file_path}&page=1&per_page=1"
     try:
@@ -39,43 +41,32 @@ def get_latest_commit_info(owner, repo, file_path):
         return "Erro ao obter data.", None
     return "Data não disponível.", None
 
-# --- FUNÇÃO MODIFICADA PARA DEPURAÇÃO ---
+# MODIFICADO: A função agora depende do commit_sha para o cache funcionar corretamente
 @st.cache_data
 def load_data(owner, repo, file_path, commit_sha):
     if not commit_sha:
         st.error("Não foi possível obter a versão do arquivo do GitHub.")
         return pd.DataFrame()
 
+    # URL que aponta para a versão exata do arquivo, ignorando o cache da CDN
     url = f"https://raw.githubusercontent.com/{owner}/{repo}/{commit_sha}/{file_path}"
     
     try:
         response = requests.get(url)
         response.raise_for_status()
         df = pd.read_excel(BytesIO(response.content), engine="openpyxl", skiprows=3)
-        
-        # --- CÓDIGO DE DEPURAÇÃO TEMPORÁRIO ---
-        st.info(f"O Pandas encontrou {len(df.columns)} colunas no arquivo Excel.")
-        st.info(f"Nomes das colunas encontradas: {list(df.columns)}")
-        st.write("Abaixo estão as 5 primeiras linhas dos dados brutos carregados pelo programa:")
-        st.dataframe(df.head())
-        # --- FIM DO CÓDIGO DE DEPURAÇÃO ---
-
         colunas_esperadas = ["Base", "Ignorar", "Descricao", "Data Ocorrencia", "Valor", "Cliente", "Cond Pagto SAP", "Dia Corte Fat"]
-        
         if len(df.columns) == len(colunas_esperadas):
-            st.success("O número de colunas está correto (8). Prosseguindo com o processamento.")
             df.columns = colunas_esperadas
             df = df.drop(columns=["Ignorar"])
         else:
             st.error("O número de colunas no arquivo Excel não corresponde ao esperado.")
             return pd.DataFrame()
-
         df["Data Ocorrencia"] = pd.to_datetime(df["Data Ocorrencia"], errors="coerce")
         df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
         df.dropna(subset=["Data Ocorrencia", "Valor", "Cliente"], inplace=True)
         df["Mês"] = df["Data Ocorrencia"].dt.to_period("M").astype(str)
         return df
-        
     except Exception as e:
         st.error(f"Erro ao carregar os dados: {e}")
         return pd.DataFrame()
@@ -84,13 +75,16 @@ def load_data(owner, repo, file_path, commit_sha):
 st.image(LOGO_URL, width=200)
 st.title("Dashboard Remessas a Faturar")
 
+# --- NOVA LÓGICA DE CARREGAMENTO ---
+# 1. Obter as informações do último commit
 update_date, latest_commit_sha = get_latest_commit_info(OWNER, REPO, ARQUIVO_DADOS_REMESSAS)
 st.caption(f"Dados atualizados em: {update_date}")
 
+# 2. Carregar os dados usando o SHA do commit
+# O cache do Streamlit só será usado se o latest_commit_sha não tiver mudado
 df = load_data(OWNER, REPO, ARQUIVO_DADOS_REMESSAS, latest_commit_sha)
 
-# O resto do código continua igual. Se a função load_data retornar um dataframe vazio,
-# a condição 'if not df.empty' abaixo garantirá que o restante não seja executado.
+# O resto do seu código continua exatamente o mesmo...
 if not df.empty:
     st.sidebar.header("Filtros")
 
