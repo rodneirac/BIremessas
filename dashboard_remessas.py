@@ -39,6 +39,7 @@ def get_latest_commit_info(owner, repo, file_path):
         return "Erro ao obter data.", None
     return "Data não disponível.", None
 
+# --- VERSÃO CORRETA DA FUNÇÃO load_data ---
 @st.cache_data
 def load_data(owner, repo, file_path, commit_sha):
     if not commit_sha:
@@ -50,17 +51,20 @@ def load_data(owner, repo, file_path, commit_sha):
     try:
         response = requests.get(url)
         response.raise_for_status()
+        # Usando skiprows=0 para ler a partir da primeira linha
         df = pd.read_excel(BytesIO(response.content), engine="openpyxl", skiprows=0)
         
+        # Lista de colunas correta, conforme sua planilha
         colunas_esperadas = ["Base", "Descricao", "Data Ocorrencia", "Valor", "Volume", "Cliente", "Cond Pagto SAP", "Dia Corte Fat."]
         
         if len(df.columns) == len(colunas_esperadas):
             df.columns = colunas_esperadas
-            # df = df.drop(columns=["Volume"]) # Não removeremos mais o Volume
+            # Não removemos mais a coluna Volume, pois vamos usá-la
         else:
             st.error(f"Erro de Mapeamento. Esperado: {len(colunas_esperadas)} colunas. Encontrado: {len(df.columns)}.")
             return pd.DataFrame()
 
+        # Tratamento correto de todas as colunas
         df["Data Ocorrencia"] = pd.to_datetime(df["Data Ocorrencia"], errors="coerce")
         df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
         
@@ -118,8 +122,8 @@ if not df.empty:
         descricao_sel = st.multiselect("Selecione as Descrições", options=descricoes, default=st.session_state['desc_selection'], label_visibility="collapsed")
         st.session_state['desc_selection'] = descricao_sel
 
-    # --- NOVO FILTRO DE MÊS ---
-    meses = sorted(df["Mês"].dropna().unique(), reverse=True) # Ordena do mais recente para o mais antigo
+    # Filtro de Mês
+    meses = sorted(df["Mês"].dropna().unique(), reverse=True)
     if 'mes_selection' not in st.session_state:
         st.session_state['mes_selection'] = []
     with st.sidebar.expander("✔️ Filtrar por Mês", expanded=True):
@@ -127,22 +131,22 @@ if not df.empty:
         if col5.button("Selecionar Todos", key='select_all_mes', use_container_width=True):
             st.session_state['mes_selection'] = meses
             st.rerun()
-        if col6.button("Limpar Todos", key='clear_all_mes', use_container_width=True):
+        if col6.button("Limpar Todas", key='clear_all_mes', use_container_width=True):
             st.session_state['mes_selection'] = []
             st.rerun()
         mes_sel = st.multiselect("Selecione os Meses", options=meses, default=st.session_state['mes_selection'], label_visibility="collapsed")
         st.session_state['mes_selection'] = mes_sel
 
-    # --- LÓGICA DE FILTRAGEM ATUALIZADA ---
+    # Lógica de Filtragem com os 3 filtros
     df_filtrado = df.copy()
     if st.session_state['base_selection']:
         df_filtrado = df_filtrado[df_filtrado['Base'].isin(st.session_state['base_selection'])]
     if st.session_state['desc_selection']:
         df_filtrado = df_filtrado[df_filtrado['Descricao'].isin(st.session_state['desc_selection'])]
-    if st.session_state['mes_selection']: # Aplicando o novo filtro
+    if st.session_state['mes_selection']:
         df_filtrado = df_filtrado[df_filtrado['Mês'].isin(st.session_state['mes_selection'])]
 
-    # --- KPIs e Gráficos (nenhuma alteração necessária aqui) ---
+    # KPIs
     total_remessas = len(df_filtrado)
     valor_total = df_filtrado["Valor"].sum()
     volume_total = df_filtrado["Volume"].sum()
