@@ -67,7 +67,7 @@ def load_data(owner, repo, file_path, commit_sha):
         # --- NOVA LÓGICA: AGRUPAMENTO DE CLIENTES MRV ---
         # Identifica as linhas com a condição de pagamento 'V029' e renomeia o cliente.
         # Usamos .astype(str) para garantir que a comparação funcione mesmo se a coluna for numérica.
-        df.loc[df['Cond Pagto SAP'].astype(str) == 'V029', 'Cliente'] = 'Grupo MRV Engenharia'
+        df.loc[df['Cond Pagto SAP'].astype(str) == 'V029', 'Cliente'] = 'GRUPO MRV ENGENHARIA SA'
 
         return df
     except Exception as e:
