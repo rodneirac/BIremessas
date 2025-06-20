@@ -5,7 +5,7 @@ import plotly.express as px
 from datetime import datetime
 import locale
 import requests
-from io import BytesIO, StringIO
+from io import BytesIO
 
 # 2. CONFIGURAÇÕES INICIAIS DA PÁGINA E LOCALIDADE
 st.set_page_config(layout="wide")
@@ -30,58 +30,38 @@ def load_data_from_url(url):
         st.info("Verifique se o link está correto e se o compartilhamento do arquivo está como 'Qualquer pessoa com o link'.")
         return pd.DataFrame(), "Erro na atualização"
 
-# --- FUNÇÃO DE PROCESSAMENTO COM MODO DE DIAGNÓSTICO DETALHADO ---
+# --- FUNÇÃO DE PROCESSAMENTO COM A LÓGICA FINAL ---
 def process_data(df_bruto):
-    df = df_bruto.copy()
-    
-    with st.expander("🔍 Diagnóstico de Processamento de Dados (Clique para expandir)"):
-        try:
-            colunas_corretas = ["Base", "Descricao", "Data Ocorrencia", "Valor", "Volume", "Cliente", "Cond Pagto SAP", "Dia Corte Fat."]
-            if len(df.columns) == len(colunas_corretas):
-                df.columns = colunas_corretas
-            else:
-                st.error(f"O arquivo lido tem {len(df.columns)} colunas, mas o programa esperava {len(colunas_corretas)}.")
-                return pd.DataFrame()
-
-            st.subheader("1. Dados Após Renomear Colunas")
-            st.write("Verifique se as colunas foram nomeadas corretamente e se os dados parecem corretos.")
-            st.dataframe(df.head(10))
-
-            # --- Tentativa de Conversão ---
-            df_convertido = df.copy()
-            df_convertido["Data Ocorrencia"] = pd.to_datetime(df_convertido["Data Ocorrencia"], errors='coerce')
-            df_convertido["Valor"] = pd.to_numeric(df_convertido["Valor"], errors='coerce')
-
-            st.subheader("2. Dados Após Conversão de Tipos")
-            st.write("Verifique as colunas 'Data Ocorrencia' e 'Valor'. Se estiverem como 'NaT' ou 'NaN', a conversão falhou.")
-            st.dataframe(df_convertido.head(10))
-
-            st.subheader("3. Informações Técnicas (df.info)")
-            buffer = StringIO()
-            df_convertido.info(buf=buffer)
-            s = buffer.getvalue()
-            st.text("Observe o Dtype e a contagem de Non-Null das colunas 'Data Ocorrencia' e 'Valor'.", help="Dtype deve ser datetime64 e float64. Non-Null Count deve ser alto.")
-            st.text_area("df.info():", s, height=350)
-        except Exception as e:
-            st.error(f"Um erro ocorreu dentro do bloco de diagnóstico: {e}")
-
-    # O processamento original para retornar o dataframe vazio (causando a tela em branco)
     try:
-        df_original = df_bruto.copy()
-        colunas_corretas = ["Base", "Descricao", "Data Ocorrencia", "Valor", "Volume", "Cliente", "Cond Pagto SAP", "Dia Corte Fat."]
-        if len(df_original.columns) == len(colunas_corretas):
-            df_original.columns = colunas_corretas
-        else:
-            return pd.DataFrame() # Retorna vazio se as colunas não baterem
-
-        df_original["Data Ocorrencia"] = pd.to_datetime(df_original["Data Ocorrencia"], errors="coerce")
-        df_original["Valor"] = pd.to_numeric(df_original["Valor"], errors="coerce")
-        df_original.dropna(subset=["Data Ocorrencia", "Valor", "Cliente"], inplace=True)
+        df = df_bruto.copy()
         
-        # Se chegou aqui e o df está vazio, ele retorna vazio, causando a tela em branco.
-        return df_original
-    except:
-        return pd.DataFrame() # Retorna vazio em caso de qualquer erro.
+        # --- CORREÇÃO FINAL APLICADA AQUI ---
+        # 1. Remove a coluna em branco (que é a segunda coluna, de índice 1)
+        df = df.drop(columns=[1])
+        
+        # 2. Define os nomes para as colunas restantes
+        colunas_corretas = ["Base", "Descricao", "Data Ocorrencia", "Valor", "Cliente", "Cond Pagto SAP", "Dia Corte Fat."]
+        
+        if len(df.columns) == len(colunas_corretas):
+            df.columns = colunas_corretas
+        else:
+            st.error(f"O arquivo lido, após remover colunas em branco, tem {len(df.columns)} colunas, mas o programa esperava {len(colunas_corretas)}.")
+            return pd.DataFrame()
+
+        # 3. O resto do processamento continua normalmente
+        df["Data Ocorrencia"] = pd.to_datetime(df["Data Ocorrencia"], errors="coerce")
+        df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
+        
+        df.dropna(subset=["Data Ocorrencia", "Valor", "Cliente"], inplace=True)
+        df["Mês"] = df["Data Ocorrencia"].dt.to_period("M").astype(str)
+        
+        df.loc[df['Cond Pagto SAP'].astype(str) == 'V029', 'Cliente'] = 'Grupo MRV Engenharia'
+        
+        return df
+    except Exception as e:
+        st.error(f"Erro ao processar os dados: {e}")
+        st.info("Ocorreu um erro inesperado durante o processamento dos dados.")
+        return pd.DataFrame()
 
 # 4. LÓGICA PRINCIPAL E CONSTRUÇÃO DA INTERFACE
 st.image(LOGO_URL, width=200)
@@ -91,12 +71,109 @@ raw_df, update_info = load_data_from_url(URL_DOWNLOAD_DIRETO)
 st.caption(f"Dados atualizados em: {update_info}")
 
 if raw_df is not None and not raw_df.empty:
-    # A função de processo é chamada, mas o diagnóstico será exibido primeiro.
-    df = process_data(raw_df) 
+    df = process_data(raw_df)
 
-    # Como 'df' retorna vazio, o código abaixo não é executado, resultando na tela em branco.
     if not df.empty:
-        st.write("Processamento parece ter funcionado, exibindo dashboard...")
-        # ... (código do dashboard)
+        st.sidebar.header("Filtros")
+        
+        bases = sorted(df["Base"].dropna().unique())
+        if 'base_selection' not in st.session_state:
+            st.session_state['base_selection'] = []
+        with st.sidebar.expander("✔️ Filtrar por Base", expanded=True):
+            col1, col2 = st.columns(2)
+            if col1.button("Selecionar Todas", key='select_all_bases', use_container_width=True):
+                st.session_state['base_selection'] = bases
+                st.rerun()
+            if col2.button("Limpar Todas", key='clear_all_bases', use_container_width=True):
+                st.session_state['base_selection'] = []
+                st.rerun()
+            base_sel = st.multiselect("Selecione as Bases", options=bases, default=st.session_state['base_selection'], label_visibility="collapsed")
+            st.session_state['base_selection'] = base_sel
+
+        descricoes = sorted(df["Descricao"].dropna().unique())
+        if 'desc_selection' not in st.session_state:
+            st.session_state['desc_selection'] = []
+        with st.sidebar.expander("✔️ Filtrar por Descrição", expanded=True):
+            col3, col4 = st.columns(2)
+            if col3.button("Selecionar Todas", key='select_all_desc', use_container_width=True):
+                st.session_state['desc_selection'] = descricoes
+                st.rerun()
+            if col4.button("Limpar Todas", key='clear_all_desc', use_container_width=True):
+                st.session_state['desc_selection'] = []
+                st.rerun()
+            descricao_sel = st.multiselect("Selecione as Descrições", options=descricoes, default=st.session_state['desc_selection'], label_visibility="collapsed")
+            st.session_state['desc_selection'] = descricao_sel
+
+        meses = sorted(df["Mês"].dropna().unique(), reverse=True)
+        if 'mes_selection' not in st.session_state:
+            st.session_state['mes_selection'] = []
+        with st.sidebar.expander("✔️ Filtrar por Mês", expanded=True):
+            col5, col6 = st.columns(2)
+            if col5.button("Selecionar Todos", key='select_all_meses', use_container_width=True):
+                st.session_state['mes_selection'] = meses
+                st.rerun()
+            if col6.button("Limpar Todas", key='clear_all_meses', use_container_width=True):
+                st.session_state['mes_selection'] = []
+                st.rerun()
+            mes_sel = st.multiselect("Selecione os Meses", options=meses, default=st.session_state['mes_selection'], label_visibility="collapsed")
+            st.session_state['mes_selection'] = mes_sel
+
+        df_filtrado = df.copy()
+        if st.session_state['base_selection']:
+            df_filtrado = df_filtrado[df_filtrado['Base'].isin(st.session_state['base_selection'])]
+        if st.session_state['desc_selection']:
+            df_filtrado = df_filtrado[df_filtrado['Descricao'].isin(st.session_state['desc_selection'])]
+        if st.session_state['mes_selection']:
+            df_filtrado = df_filtrado[df_filtrado['Mês'].isin(st.session_state['mes_selection'])]
+        
+        # KPIs ajustados (sem Volume)
+        total_remessas = len(df_filtrado)
+        valor_total = df_filtrado["Valor"].sum()
+        valor_medio = df_filtrado["Valor"].mean() if total_remessas > 0 else 0
+
+        st.markdown("### Indicadores Gerais")
+        kpi_cols = st.columns(3) 
+        kpi_cols[0].metric("Qtde. Remessas", f"{total_remessas:n}")
+        kpi_cols[1].metric("Valor Total (R$)", locale.format_string('%.2f', valor_total, grouping=True))
+        kpi_cols[2].metric("Valor Médio (R$)", locale.format_string('%.2f', valor_medio, grouping=True))
+
+        st.markdown("---")
+        
+        chart_col1, chart_col2 = st.columns(2)
+        with chart_col1:
+            st.subheader("Evolução de Valores por Mês")
+            agrupado_mes = df_filtrado.groupby("Mês").agg({"Valor": "sum"}).reset_index().sort_values("Mês")
+            fig_bar = px.bar(agrupado_mes, x="Mês", y="Valor", text_auto='.2s', labels={"Valor": "Valor (R$)", "Mês": "Mês de Referência"})
+            fig_bar.update_traces(textposition="outside")
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+        with chart_col2:
+            st.subheader("Distribuição por Descrição")
+            agrupado_desc = df_filtrado.groupby("Descricao").agg({"Valor": "sum"}).reset_index()
+            top_n = 10
+            if len(agrupado_desc) > top_n:
+                agrupado_desc = agrupado_desc.sort_values("Valor", ascending=False)
+                outros = pd.DataFrame({'Descricao': ['Outros'], 'Valor': [agrupado_desc.iloc[top_n:]['Valor'].sum()]})
+                agrupado_desc = pd.concat([agrupado_desc.iloc[:top_n], outros], ignore_index=True)
+            fig_pie = px.pie(agrupado_desc, names="Descricao", values="Valor", hole=.3)
+            fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+            st.plotly_chart(fig_pie, use_container_width=True)
+        
+        st.markdown("---")
+
+        st.subheader("Valor Total por Base")
+        agrupado_base = df_filtrado.groupby("Base").agg({"Valor": "sum"}).reset_index().sort_values("Valor", ascending=False)
+        fig_base = px.bar(agrupado_base, x="Base", y="Valor", title="Faturamento por Base", text_auto='.2s', color_discrete_sequence=['#2ca02c'] * len(agrupado_base))
+        fig_base.update_layout(xaxis={'categoryorder':'total descending'})
+        st.plotly_chart(fig_base, use_container_width=True)
+
+        with st.expander("Ver resumo por cliente"):
+            st.markdown("#### Somatório por Cliente (com base nos filtros aplicados)")
+            resumo_cliente = df_filtrado.groupby("Cliente").agg(Valor_Total=('Valor', 'sum'), Qtde_Remessas=('Base', 'count')).reset_index()
+            resumo_cliente = resumo_cliente.sort_values("Valor_Total", ascending=False)
+            resumo_cliente['Valor_Total'] = resumo_cliente['Valor_Total'].apply(lambda x: locale.format_string('R$ %.2f', x, grouping=True))
+            resumo_cliente['Qtde_Remessas'] = resumo_cliente['Qtde_Remessas'].apply(lambda x: locale.format_string('%d', x, grouping=True))
+            st.dataframe(resumo_cliente, use_container_width=True, hide_index=True)
+
 else:
     st.warning("Não há dados disponíveis para exibição ou ocorreu um erro no carregamento.")
