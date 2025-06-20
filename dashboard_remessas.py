@@ -7,7 +7,6 @@ import locale
 import requests
 from io import BytesIO
 
-
 # 2. CONFIGURAÇÕES INICIAIS DA PÁGINA E LOCALIDADE
 st.set_page_config(layout="wide")
 try:
@@ -16,29 +15,30 @@ except locale.Error:
     st.warning("Localidade 'pt_BR.UTF-8' não encontrada...")
 
 # 3. CONSTANTES E FUNÇÕES
-# --- URL DIRETA PARA EXPORTAÇÃO DA SUA PLANILHA GOOGLE COMO CSV ---
-URL_PLANILHA = "https://docs.google.com/spreadsheets/d/111jEo-wgeRKdXY7nq9laKeXRfifovHRR/export?format=csv"
+# --- URL DE DOWNLOAD DIRETO PARA SEU ARQUIVO EXCEL NO GOOGLE DRIVE ---
+ID_ARQUIVO_DRIVE = "111jEo-wgeRKdXY7nq9laKeXRfifovHRR"
+URL_DOWNLOAD_DIRETO = f"https://drive.google.com/uc?export=download&id={ID_ARQUIVO_DRIVE}"
 LOGO_URL = "https://raw.githubusercontent.com/rodneirac/BIremessas/main/logo.png"
 
-# Função para carregar dados da URL da Planilha Google
+# Função para carregar dados da URL do Google Drive
 @st.cache_data(ttl=300) # Cache de 5 minutos
 def load_data_from_url(url):
     try:
-        # Lê diretamente a URL que exporta a planilha como CSV
-        df = pd.read_csv(url)
+        # Lê diretamente a URL de download do arquivo Excel
+        df = pd.read_excel(url, engine="openpyxl")
         # Pega a data e hora atuais como referência da atualização
-        update_time = f"**{datetime.now().strftime('%d/%m/%Y às %H:%M')}** (dados da Planilha Google)"
+        update_time = f"**{datetime.now().strftime('%d/%m/%Y às %H:%M')}** (dados do Google Drive)"
         return df, update_time
     except Exception as e:
-        st.error(f"Erro ao carregar dados da URL da Planilha Google: {e}")
-        st.info("Verifique se o link está correto e se o compartilhamento da planilha está como 'Qualquer pessoa com o link'.")
+        st.error(f"Erro ao carregar dados da URL do Google Drive: {e}")
+        st.info("Verifique se o link está correto e se o compartilhamento do arquivo está como 'Qualquer pessoa com o link'.")
         return pd.DataFrame(), "Erro na atualização"
 
 # Função para processar e limpar os dados depois de carregados
 def process_data(df):
     try:
         # Renomeia as colunas conforme a estrutura esperada
-        # Garanta que sua Planilha Google tenha exatamente estas 8 colunas nesta ordem
+        # Garanta que seu arquivo Excel tenha exatamente estas 8 colunas nesta ordem
         colunas_esperadas = ["Base", "Descricao", "Data Ocorrencia", "Valor", "Volume", "Cliente", "Cond Pagto SAP", "Dia Corte Fat."]
         df.columns = colunas_esperadas
 
@@ -59,15 +59,15 @@ def process_data(df):
         return df
     except Exception as e:
         st.error(f"Erro ao processar os dados após o carregamento: {e}")
-        st.info("Verifique se os nomes e a ordem das colunas na sua Planilha Google estão corretos.")
+        st.info("Verifique se os nomes e a ordem das colunas no seu arquivo Excel estão corretos.")
         return pd.DataFrame()
 
 # 4. LÓGICA PRINCIPAL E CONSTRUÇÃO DA INTERFACE
 st.image(LOGO_URL, width=200)
 st.title("Dashboard Remessas a Faturar")
 
-# Carrega os dados brutos da Planilha Google
-raw_df, update_info = load_data_from_url(URL_PLANILHA)
+# Carrega os dados brutos do Google Drive
+raw_df, update_info = load_data_from_url(URL_DOWNLOAD_DIRETO)
 
 st.caption(f"Dados atualizados em: {update_info}")
 
@@ -184,4 +184,4 @@ if raw_df is not None and not raw_df.empty:
             st.dataframe(resumo_cliente, use_container_width=True, hide_index=True)
 
 else:
-    st.warning("Não há dados disponíveis para exibição ou ocorreu um erro no carregamento.")
+    st.warning("Não há dados disponíveis para exibição. Verifique se a Planilha Google está preenchida e compartilhada corretamente.")
