@@ -55,7 +55,7 @@ def process_data(df_bruto):
         df.dropna(subset=["Data Ocorrencia", "Valor", "Cliente"], inplace=True)
         df["Mês"] = df["Data Ocorrencia"].dt.to_period("M").astype(str)
         
-        df.loc[df['Cond Pagto SAP'].astype(str) == 'V029', 'Cliente'] = 'Grupo MRV Engenharia'
+        df.loc[df['Cond Pagto SAP'].astype(str) == 'V029', 'Cliente'] = 'GRUPO MRV ENGENHARIA SA'
         
         return df
     except Exception as e:
