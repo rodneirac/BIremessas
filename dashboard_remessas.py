@@ -30,33 +30,23 @@ def load_data_from_url(url):
         st.info("Verifique se o link está correto e se o compartilhamento do arquivo está como 'Qualquer pessoa com o link'.")
         return pd.DataFrame(), "Erro na atualização"
 
-# --- FUNÇÃO DE PROCESSAMENTO COM A LÓGICA FINAL ---
 def process_data(df_bruto):
     try:
         df = df_bruto.copy()
-        
-        # --- CORREÇÃO FINAL APLICADA AQUI ---
-        # 1. Remove a coluna em branco (que é a segunda coluna, de índice 1)
         df = df.drop(columns=[1])
-        
-        # 2. Define os nomes para as colunas restantes
         colunas_corretas = ["Base", "Descricao", "Data Ocorrencia", "Valor", "Cliente", "Cond Pagto SAP", "Dia Corte Fat."]
-        
         if len(df.columns) == len(colunas_corretas):
             df.columns = colunas_corretas
         else:
             st.error(f"O arquivo lido, após remover colunas em branco, tem {len(df.columns)} colunas, mas o programa esperava {len(colunas_corretas)}.")
             return pd.DataFrame()
-
-        # 3. O resto do processamento continua normalmente
         df["Data Ocorrencia"] = pd.to_datetime(df["Data Ocorrencia"], errors="coerce")
         df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
-        
         df.dropna(subset=["Data Ocorrencia", "Valor", "Cliente"], inplace=True)
         df["Mês"] = df["Data Ocorrencia"].dt.to_period("M").astype(str)
-        
-        df.loc[df['Cond Pagto SAP'].astype(str) == 'V029', 'Cliente'] = 'GRUPO MRV ENGENHARIA'
-        
+        df.loc[df['Cond Pagto SAP'].astype(str) == 'V029', 'Cliente'] = 'Grupo MRV Engenharia'
+        # Adicionando uma coluna de volume dummy, já que ela não existe mais no arquivo
+        df['Volume'] = 0 
         return df
     except Exception as e:
         st.error(f"Erro ao processar os dados: {e}")
@@ -72,10 +62,10 @@ st.caption(f"Dados atualizados em: {update_info}")
 
 if raw_df is not None and not raw_df.empty:
     df = process_data(raw_df)
-
     if not df.empty:
         st.sidebar.header("Filtros")
         
+        # (Filtros permanecem inalterados)
         bases = sorted(df["Base"].dropna().unique())
         if 'base_selection' not in st.session_state:
             st.session_state['base_selection'] = []
@@ -109,7 +99,7 @@ if raw_df is not None and not raw_df.empty:
             st.session_state['mes_selection'] = []
         with st.sidebar.expander("✔️ Filtrar por Mês", expanded=True):
             col5, col6 = st.columns(2)
-            if col5.button("Selecionar Todos", key='select_all_meses', use_container_width=True):
+            if col5.button("Selecionar Todas", key='select_all_meses', use_container_width=True):
                 st.session_state['mes_selection'] = meses
                 st.rerun()
             if col6.button("Limpar Todas", key='clear_all_meses', use_container_width=True):
@@ -126,9 +116,10 @@ if raw_df is not None and not raw_df.empty:
         if st.session_state['mes_selection']:
             df_filtrado = df_filtrado[df_filtrado['Mês'].isin(st.session_state['mes_selection'])]
         
-        # KPIs ajustados (sem Volume)
+        # (KPIs permanecem inalterados)
         total_remessas = len(df_filtrado)
         valor_total = df_filtrado["Valor"].sum()
+        volume_total = df_filtrado["Volume"].sum()
         valor_medio = df_filtrado["Valor"].mean() if total_remessas > 0 else 0
 
         st.markdown("### Indicadores Gerais")
@@ -136,7 +127,6 @@ if raw_df is not None and not raw_df.empty:
         kpi_cols[0].metric("Qtde. Remessas", f"{total_remessas:n}")
         kpi_cols[1].metric("Valor Total (R$)", locale.format_string('%.2f', valor_total, grouping=True))
         kpi_cols[2].metric("Valor Médio (R$)", locale.format_string('%.2f', valor_medio, grouping=True))
-
         st.markdown("---")
         
         chart_col1, chart_col2 = st.columns(2)
@@ -161,11 +151,28 @@ if raw_df is not None and not raw_df.empty:
         
         st.markdown("---")
 
-        st.subheader("Valor Total por Base")
-        agrupado_base = df_filtrado.groupby("Base").agg({"Valor": "sum"}).reset_index().sort_values("Valor", ascending=False)
-        fig_base = px.bar(agrupado_base, x="Base", y="Valor", title="Faturamento por Base", text_auto='.2s', color_discrete_sequence=['#2ca02c'] * len(agrupado_base))
-        fig_base.update_layout(xaxis={'categoryorder':'total descending'})
-        st.plotly_chart(fig_base, use_container_width=True)
+        # --- GRÁFICO DE BARRAS ANIMADO ---
+        st.subheader("Evolução do Valor por Base ao Longo dos Meses")
+        # Agrupa os dados por Mês e Base para a animação
+        agrupado_anim = df_filtrado.groupby(['Mês', 'Base'])['Valor'].sum().reset_index().sort_values(by='Mês')
+        
+        if not agrupado_anim.empty:
+            # Cria o gráfico de barras animado
+            fig_animada = px.bar(
+                agrupado_anim,
+                x="Base",
+                y="Valor",
+                color="Base",
+                animation_frame="Mês",
+                animation_group="Base",
+                range_y=[0, agrupado_anim['Valor'].max() * 1.1], # Eixo Y fixo para melhor comparação
+                labels={"Valor": "Valor Acumulado (R$)"}
+            )
+            fig_animada.update_layout(xaxis={'categoryorder':'total descending'})
+            st.plotly_chart(fig_animada, use_container_width=True)
+        else:
+            st.info("Não há dados para o gráfico animado com os filtros selecionados.")
+        
 
         with st.expander("Ver resumo por cliente"):
             st.markdown("#### Somatório por Cliente (com base nos filtros aplicados)")
@@ -175,5 +182,7 @@ if raw_df is not None and not raw_df.empty:
             resumo_cliente['Qtde_Remessas'] = resumo_cliente['Qtde_Remessas'].apply(lambda x: locale.format_string('%d', x, grouping=True))
             st.dataframe(resumo_cliente, use_container_width=True, hide_index=True)
 
+    else:
+        st.warning("Dados carregados, mas o processamento resultou em uma tabela vazia.")
 else:
     st.warning("Não há dados disponíveis para exibição ou ocorreu um erro no carregamento.")
