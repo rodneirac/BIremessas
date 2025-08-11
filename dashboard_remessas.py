@@ -4,6 +4,8 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime
 import locale
+import sqlite3
+from pathlib import Path
 
 # 2. CONFIGURAÇÕES INICIAIS DA PÁGINA E LOCALIDADE
 st.set_page_config(layout="wide")
@@ -17,6 +19,35 @@ ID_ARQUIVO_DRIVE = "111jEo-wgeRKdXY7nq9laKeXRfifovHRR"
 URL_DOWNLOAD_DIRETO = f"https://drive.google.com/uc?export=download&id={ID_ARQUIVO_DRIVE}"
 LOGO_URL = "https://raw.githubusercontent.com/rodneirac/BIremessas/main/logo.png"
 
+# ---------- Persistência das observações (SQLite) ----------
+DB_PATH = Path("observacoes.db")
+
+@st.cache_resource
+def get_db_conn():
+    conn = sqlite3.connect(DB_PATH.as_posix(), check_same_thread=False)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS obs_clientes (
+            cliente TEXT PRIMARY KEY,
+            observacao TEXT DEFAULT '',
+            updated_at TEXT
+        )
+    """)
+    conn.commit()
+    return conn
+
+def carregar_observacoes(conn) -> dict:
+    cur = conn.execute("SELECT cliente, observacao FROM obs_clientes")
+    return {row[0]: (row[1] or "") for row in cur.fetchall()}
+
+def salvar_observacao(conn, cliente: str, observacao: str):
+    conn.execute(
+        "INSERT INTO obs_clientes (cliente, observacao, updated_at) VALUES (?, ?, ?) "
+        "ON CONFLICT(cliente) DO UPDATE SET observacao=excluded.observacao, updated_at=excluded.updated_at",
+        (cliente, observacao, datetime.now().isoformat(timespec="seconds"))
+    )
+    conn.commit()
+
+# ---------- Carga de dados ----------
 @st.cache_data(ttl=300)
 def load_data_from_url(url):
     try:
@@ -28,38 +59,33 @@ def load_data_from_url(url):
         st.info("Verifique se o link está correto e se o compartilhamento do arquivo está como 'Qualquer pessoa com o link'.")
         return pd.DataFrame(), "Erro na atualização"
 
-# --- FUNÇÃO DE PROCESSAMENTO COM A LÓGICA FINAL ---
+# --- Processamento ---
 def process_data(df_bruto):
     try:
         df = df_bruto.copy()
-
-        # 1) Remove a coluna em branco (segunda coluna, índice 1)
+        # 1) Remove a coluna em branco (índice 1)
         df = df.drop(columns=[1])
-
-        # 2) Define os nomes de colunas
+        # 2) Define colunas
         colunas_corretas = ["Base", "Descricao", "Data Ocorrencia", "Valor", "Cliente", "Cond Pagto SAP", "Dia Corte Fat."]
         if len(df.columns) == len(colunas_corretas):
             df.columns = colunas_corretas
         else:
             st.error(f"O arquivo lido, após remover colunas em branco, tem {len(df.columns)} colunas, mas o programa esperava {len(colunas_corretas)}.")
             return pd.DataFrame()
-
-        # 3) Conversões e limpezas
+        # 3) Conversões
         df["Data Ocorrencia"] = pd.to_datetime(df["Data Ocorrencia"], errors="coerce")
         df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
         df.dropna(subset=["Data Ocorrencia", "Valor", "Cliente"], inplace=True)
         df["Mês"] = df["Data Ocorrencia"].dt.to_period("M").astype(str)
-
         # 4) Regra de cliente para cond. pagto V029
         df.loc[df['Cond Pagto SAP'].astype(str) == 'V029', 'Cliente'] = 'GRUPO MRV ENGENHARIA SA'
-
         return df
     except Exception as e:
         st.error(f"Erro ao processar os dados: {e}")
         st.info("Ocorreu um erro inesperado durante o processamento dos dados.")
         return pd.DataFrame()
 
-# 4. LÓGICA PRINCIPAL E CONSTRUÇÃO DA INTERFACE
+# 4. UI
 st.image(LOGO_URL, width=200)
 st.title("Dashboard Remessas a Faturar")
 
@@ -166,15 +192,16 @@ if raw_df is not None and not raw_df.empty:
         fig_base.update_layout(xaxis={'categoryorder': 'total descending'})
         st.plotly_chart(fig_base, use_container_width=True)
 
-        # --------- RESUMO POR CLIENTE + OBSERVAÇÕES PERSISTENTES NA SESSÃO ---------
-        with st.expander("Ver resumo por cliente"):
+        # --------- RESUMO POR CLIENTE + OBSERVAÇÕES (PERSISTE EM DISCO) ---------
+        with st.expander("Ver resumo por cliente", expanded=False):
             st.markdown("#### Somatório por Cliente (com base nos filtros aplicados)")
+
             resumo_cliente = df_filtrado.groupby("Cliente").agg(
                 Valor_Total=('Valor', 'sum'),
                 Qtde_Remessas=('Base', 'count')
             ).reset_index().sort_values("Valor_Total", ascending=False)
 
-            # tabela formatada para exibição
+            # tabela para exibição com formatação
             resumo_cliente_exib = resumo_cliente.copy()
             resumo_cliente_exib['Valor_Total'] = resumo_cliente_exib['Valor_Total'].apply(
                 lambda x: locale.format_string('R$ %.2f', x, grouping=True)
@@ -183,16 +210,15 @@ if raw_df is not None and not raw_df.empty:
                 lambda x: locale.format_string('%d', x, grouping=True)
             )
 
-            # estado para observações
-            if 'obs_por_cliente' not in st.session_state:
-                st.session_state['obs_por_cliente'] = {}  # {cliente: observacao}
+            # carregar observações do banco
+            conn = get_db_conn()
+            obs_dict = carregar_observacoes(conn)
 
-            # coluna Observação com valores do estado
+            # coluna Observação alimentada pelo banco
             resumo_cliente_exib['Observação'] = resumo_cliente_exib['Cliente'].map(
-                lambda c: st.session_state['obs_por_cliente'].get(c, "")
+                lambda c: obs_dict.get(c, "")
             )
 
-            # editor permitindo editar apenas Observação
             edited_df = st.data_editor(
                 resumo_cliente_exib,
                 key="resumo_cliente_editor",
@@ -203,15 +229,15 @@ if raw_df is not None and not raw_df.empty:
                     "Valor_Total": st.column_config.TextColumn(disabled=True),
                     "Qtde_Remessas": st.column_config.TextColumn(disabled=True),
                     "Observação": st.column_config.TextColumn(
-                        help="Anotações livres vinculadas ao cliente",
+                        help="Anotações livres vinculadas ao cliente (salvas automaticamente)",
                         width="medium"
                     ),
                 },
             )
 
-            # salva observações apenas do que está em tela (o resto permanece guardado)
+            # salvar alterações no banco (apenas linhas visíveis)
             for row in edited_df.itertuples(index=False):
-                st.session_state['obs_por_cliente'][row.Cliente] = row.Observação
+                salvar_observacao(conn, row.Cliente, getattr(row, "Observação") or "")
 
 else:
     st.warning("Não há dados disponíveis para exibição ou ocorreu um erro no carregamento.")
