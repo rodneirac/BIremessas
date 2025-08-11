@@ -167,13 +167,51 @@ if raw_df is not None and not raw_df.empty:
         fig_base.update_layout(xaxis={'categoryorder':'total descending'})
         st.plotly_chart(fig_base, use_container_width=True)
 
-        with st.expander("Ver resumo por cliente"):
-            st.markdown("#### Somatório por Cliente (com base nos filtros aplicados)")
-            resumo_cliente = df_filtrado.groupby("Cliente").agg(Valor_Total=('Valor', 'sum'), Qtde_Remessas=('Base', 'count')).reset_index()
-            resumo_cliente = resumo_cliente.sort_values("Valor_Total", ascending=False)
-            resumo_cliente['Valor_Total'] = resumo_cliente['Valor_Total'].apply(lambda x: locale.format_string('R$ %.2f', x, grouping=True))
-            resumo_cliente['Qtde_Remessas'] = resumo_cliente['Qtde_Remessas'].apply(lambda x: locale.format_string('%d', x, grouping=True))
-            st.dataframe(resumo_cliente, use_container_width=True, hide_index=True)
+       with st.expander("Ver resumo por cliente"):
+    st.markdown("#### Somatório por Cliente (com base nos filtros aplicados)")
+    resumo_cliente = df_filtrado.groupby("Cliente").agg(
+        Valor_Total=('Valor', 'sum'),
+        Qtde_Remessas=('Base', 'count')
+    ).reset_index().sort_values("Valor_Total", ascending=False)
+
+    # --- formatação para exibição ---
+    resumo_cliente_exib = resumo_cliente.copy()
+    resumo_cliente_exib['Valor_Total'] = resumo_cliente_exib['Valor_Total'].apply(
+        lambda x: locale.format_string('R$ %.2f', x, grouping=True)
+    )
+    resumo_cliente_exib['Qtde_Remessas'] = resumo_cliente_exib['Qtde_Remessas'].apply(
+        lambda x: locale.format_string('%d', x, grouping=True)
+    )
+
+    # --- estado com observações por cliente (persiste durante a sessão) ---
+    if 'obs_por_cliente' not in st.session_state:
+        st.session_state['obs_por_cliente'] = {}  # dict: {cliente: observacao}
+
+    # adiciona coluna Observação com o que já existe no estado
+    resumo_cliente_exib['Observação'] = resumo_cliente_exib['Cliente'].map(
+        lambda c: st.session_state['obs_por_cliente'].get(c, "")
+    )
+
+    # editor para permitir editar apenas a coluna Observação
+    edited_df = st.data_editor(
+        resumo_cliente_exib,
+        key="resumo_cliente_editor",
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Cliente": st.column_config.TextColumn(disabled=True),
+            "Valor_Total": st.column_config.TextColumn(disabled=True),
+            "Qtde_Remessas": st.column_config.TextColumn(disabled=True),
+            "Observação": st.column_config.TextColumn(
+                help="Anotações livres vinculadas ao cliente",
+                width="medium"
+            ),
+        },
+    )
+
+    # salva de volta no session_state apenas o que está na lista atual
+    for row in edited_df.itertuples(index=False):
+        st.session_state['obs_por_cliente'][row.Cliente] = row.Observação
 
 else:
     st.warning("Não há dados disponíveis para exibição ou ocorreu um erro no carregamento.")
