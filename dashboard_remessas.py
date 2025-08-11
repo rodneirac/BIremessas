@@ -4,8 +4,6 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime
 import locale
-import requests
-from io import BytesIO
 
 # 2. CONFIGURAÇÕES INICIAIS DA PÁGINA E LOCALIDADE
 st.set_page_config(layout="wide")
@@ -34,29 +32,27 @@ def load_data_from_url(url):
 def process_data(df_bruto):
     try:
         df = df_bruto.copy()
-        
-        # --- CORREÇÃO FINAL APLICADA AQUI ---
-        # 1. Remove a coluna em branco (que é a segunda coluna, de índice 1)
+
+        # 1) Remove a coluna em branco (segunda coluna, índice 1)
         df = df.drop(columns=[1])
-        
-        # 2. Define os nomes para as colunas restantes
+
+        # 2) Define os nomes de colunas
         colunas_corretas = ["Base", "Descricao", "Data Ocorrencia", "Valor", "Cliente", "Cond Pagto SAP", "Dia Corte Fat."]
-        
         if len(df.columns) == len(colunas_corretas):
             df.columns = colunas_corretas
         else:
             st.error(f"O arquivo lido, após remover colunas em branco, tem {len(df.columns)} colunas, mas o programa esperava {len(colunas_corretas)}.")
             return pd.DataFrame()
 
-        # 3. O resto do processamento continua normalmente
+        # 3) Conversões e limpezas
         df["Data Ocorrencia"] = pd.to_datetime(df["Data Ocorrencia"], errors="coerce")
         df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
-        
         df.dropna(subset=["Data Ocorrencia", "Valor", "Cliente"], inplace=True)
         df["Mês"] = df["Data Ocorrencia"].dt.to_period("M").astype(str)
-        
+
+        # 4) Regra de cliente para cond. pagto V029
         df.loc[df['Cond Pagto SAP'].astype(str) == 'V029', 'Cliente'] = 'GRUPO MRV ENGENHARIA SA'
-        
+
         return df
     except Exception as e:
         st.error(f"Erro ao processar os dados: {e}")
@@ -74,8 +70,9 @@ if raw_df is not None and not raw_df.empty:
     df = process_data(raw_df)
 
     if not df.empty:
+        # --------- FILTROS ---------
         st.sidebar.header("Filtros")
-        
+
         bases = sorted(df["Base"].dropna().unique())
         if 'base_selection' not in st.session_state:
             st.session_state['base_selection'] = []
@@ -118,6 +115,7 @@ if raw_df is not None and not raw_df.empty:
             mes_sel = st.multiselect("Selecione os Meses", options=meses, default=st.session_state['mes_selection'], label_visibility="collapsed")
             st.session_state['mes_selection'] = mes_sel
 
+        # --------- APLICAÇÃO DOS FILTROS ---------
         df_filtrado = df.copy()
         if st.session_state['base_selection']:
             df_filtrado = df_filtrado[df_filtrado['Base'].isin(st.session_state['base_selection'])]
@@ -125,20 +123,21 @@ if raw_df is not None and not raw_df.empty:
             df_filtrado = df_filtrado[df_filtrado['Descricao'].isin(st.session_state['desc_selection'])]
         if st.session_state['mes_selection']:
             df_filtrado = df_filtrado[df_filtrado['Mês'].isin(st.session_state['mes_selection'])]
-        
-        # KPIs ajustados (sem Volume)
+
+        # --------- KPIs ---------
         total_remessas = len(df_filtrado)
         valor_total = df_filtrado["Valor"].sum()
         valor_medio = df_filtrado["Valor"].mean() if total_remessas > 0 else 0
 
         st.markdown("### Indicadores Gerais")
-        kpi_cols = st.columns(3) 
+        kpi_cols = st.columns(3)
         kpi_cols[0].metric("Qtde. Remessas", f"{total_remessas:n}")
         kpi_cols[1].metric("Valor Total (R$)", locale.format_string('%.2f', valor_total, grouping=True))
         kpi_cols[2].metric("Valor Médio (R$)", locale.format_string('%.2f', valor_medio, grouping=True))
 
         st.markdown("---")
-        
+
+        # --------- GRÁFICOS ---------
         chart_col1, chart_col2 = st.columns(2)
         with chart_col1:
             st.subheader("Evolução de Valores por Mês")
@@ -158,60 +157,61 @@ if raw_df is not None and not raw_df.empty:
             fig_pie = px.pie(agrupado_desc, names="Descricao", values="Valor", hole=.3)
             fig_pie.update_traces(textposition='inside', textinfo='percent+label')
             st.plotly_chart(fig_pie, use_container_width=True)
-        
+
         st.markdown("---")
 
         st.subheader("Valor Total por Base")
         agrupado_base = df_filtrado.groupby("Base").agg({"Valor": "sum"}).reset_index().sort_values("Valor", ascending=False)
         fig_base = px.bar(agrupado_base, x="Base", y="Valor", title="Faturamento por Base", text_auto='.2s', color_discrete_sequence=['#2ca02c'] * len(agrupado_base))
-        fig_base.update_layout(xaxis={'categoryorder':'total descending'})
+        fig_base.update_layout(xaxis={'categoryorder': 'total descending'})
         st.plotly_chart(fig_base, use_container_width=True)
 
-       with st.expander("Ver resumo por cliente"):
-    st.markdown("#### Somatório por Cliente (com base nos filtros aplicados)")
-    resumo_cliente = df_filtrado.groupby("Cliente").agg(
-        Valor_Total=('Valor', 'sum'),
-        Qtde_Remessas=('Base', 'count')
-    ).reset_index().sort_values("Valor_Total", ascending=False)
+        # --------- RESUMO POR CLIENTE + OBSERVAÇÕES PERSISTENTES NA SESSÃO ---------
+        with st.expander("Ver resumo por cliente"):
+            st.markdown("#### Somatório por Cliente (com base nos filtros aplicados)")
+            resumo_cliente = df_filtrado.groupby("Cliente").agg(
+                Valor_Total=('Valor', 'sum'),
+                Qtde_Remessas=('Base', 'count')
+            ).reset_index().sort_values("Valor_Total", ascending=False)
 
-    # --- formatação para exibição ---
-    resumo_cliente_exib = resumo_cliente.copy()
-    resumo_cliente_exib['Valor_Total'] = resumo_cliente_exib['Valor_Total'].apply(
-        lambda x: locale.format_string('R$ %.2f', x, grouping=True)
-    )
-    resumo_cliente_exib['Qtde_Remessas'] = resumo_cliente_exib['Qtde_Remessas'].apply(
-        lambda x: locale.format_string('%d', x, grouping=True)
-    )
+            # tabela formatada para exibição
+            resumo_cliente_exib = resumo_cliente.copy()
+            resumo_cliente_exib['Valor_Total'] = resumo_cliente_exib['Valor_Total'].apply(
+                lambda x: locale.format_string('R$ %.2f', x, grouping=True)
+            )
+            resumo_cliente_exib['Qtde_Remessas'] = resumo_cliente_exib['Qtde_Remessas'].apply(
+                lambda x: locale.format_string('%d', x, grouping=True)
+            )
 
-    # --- estado com observações por cliente (persiste durante a sessão) ---
-    if 'obs_por_cliente' not in st.session_state:
-        st.session_state['obs_por_cliente'] = {}  # dict: {cliente: observacao}
+            # estado para observações
+            if 'obs_por_cliente' not in st.session_state:
+                st.session_state['obs_por_cliente'] = {}  # {cliente: observacao}
 
-    # adiciona coluna Observação com o que já existe no estado
-    resumo_cliente_exib['Observação'] = resumo_cliente_exib['Cliente'].map(
-        lambda c: st.session_state['obs_por_cliente'].get(c, "")
-    )
+            # coluna Observação com valores do estado
+            resumo_cliente_exib['Observação'] = resumo_cliente_exib['Cliente'].map(
+                lambda c: st.session_state['obs_por_cliente'].get(c, "")
+            )
 
-    # editor para permitir editar apenas a coluna Observação
-    edited_df = st.data_editor(
-        resumo_cliente_exib,
-        key="resumo_cliente_editor",
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Cliente": st.column_config.TextColumn(disabled=True),
-            "Valor_Total": st.column_config.TextColumn(disabled=True),
-            "Qtde_Remessas": st.column_config.TextColumn(disabled=True),
-            "Observação": st.column_config.TextColumn(
-                help="Anotações livres vinculadas ao cliente",
-                width="medium"
-            ),
-        },
-    )
+            # editor permitindo editar apenas Observação
+            edited_df = st.data_editor(
+                resumo_cliente_exib,
+                key="resumo_cliente_editor",
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Cliente": st.column_config.TextColumn(disabled=True),
+                    "Valor_Total": st.column_config.TextColumn(disabled=True),
+                    "Qtde_Remessas": st.column_config.TextColumn(disabled=True),
+                    "Observação": st.column_config.TextColumn(
+                        help="Anotações livres vinculadas ao cliente",
+                        width="medium"
+                    ),
+                },
+            )
 
-    # salva de volta no session_state apenas o que está na lista atual
-    for row in edited_df.itertuples(index=False):
-        st.session_state['obs_por_cliente'][row.Cliente] = row.Observação
+            # salva observações apenas do que está em tela (o resto permanece guardado)
+            for row in edited_df.itertuples(index=False):
+                st.session_state['obs_por_cliente'][row.Cliente] = row.Observação
 
 else:
     st.warning("Não há dados disponíveis para exibição ou ocorreu um erro no carregamento.")
