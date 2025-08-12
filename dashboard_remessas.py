@@ -1,4 +1,4 @@
-# 1. IMPORTS
+# 1) IMPORTS
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -8,42 +8,40 @@ import sqlite3
 from pathlib import Path
 import unicodedata
 import re
+import io
 
-# 2. CONFIGURAÇÕES INICIAIS DA PÁGINA E LOCALIDADE
+# 2) CONFIGURAÇÕES INICIAIS
 st.set_page_config(layout="wide")
 try:
     locale.setlocale(locale.LC_ALL, 'pt_BR.UTF-8')
 except locale.Error:
     st.warning("Localidade 'pt_BR.UTF-8' não encontrada...")
 
-# 3. CONSTANTES E FUNÇÕES
+# 3) CONSTANTES
 ID_ARQUIVO_DRIVE = "111jEo-wgeRKdXY7nq9laKeXRfifovHRR"
 URL_DOWNLOAD_DIRETO = f"https://drive.google.com/uc?export=download&id={ID_ARQUIVO_DRIVE}"
 LOGO_URL = "https://raw.githubusercontent.com/rodneirac/BIremessas/main/logo.png"
 
-# ---------- Normalização de chaves ----------
+# 4) NORMALIZAÇÃO DE CHAVE DE CLIENTE
 def normalize_cliente(s) -> str:
+    """Gera uma chave estável para o cliente: maiúsculas, sem acentos e sem pontuação estranha."""
     if s is None:
         return ""
     if not isinstance(s, str):
         s = str(s)
     s = s.strip().upper()
-    # remove acentos
     s = unicodedata.normalize("NFKD", s)
     s = "".join(c for c in s if not unicodedata.combining(c))
-    # remove pontuação estranha, mantém letras, números e espaço
     s = re.sub(r"[^A-Z0-9 ]+", " ", s)
-    # colapsa espaços
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
-# ---------- Persistência das observações (SQLite) ----------
+# 5) PERSISTÊNCIA (SQLite)
 DB_PATH = Path("observacoes.db")
 
 @st.cache_resource
 def get_db_conn():
     conn = sqlite3.connect(DB_PATH.as_posix(), check_same_thread=False)
-    # Tabela nova baseada em chave normalizada
     conn.execute("""
         CREATE TABLE IF NOT EXISTS obs_clientes_k (
             cliente_key TEXT PRIMARY KEY,
@@ -52,29 +50,18 @@ def get_db_conn():
             updated_at TEXT
         )
     """)
-    # Migração simples da tabela antiga, se existir
-    try:
-        cur = conn.execute("SELECT cliente, observacao FROM obs_clientes")
-        rows = cur.fetchall()
-        for cli, obs in rows:
-            key = normalize_cliente(cli)
-            conn.execute(
-                "INSERT INTO obs_clientes_k (cliente_key, cliente_display, observacao, updated_at) "
-                "VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(cliente_key) DO NOTHING",
-                (key, cli, obs or "", datetime.now().isoformat(timespec="seconds"))
-            )
-        conn.commit()
-    except sqlite3.OperationalError:
-        # tabela antiga não existe — segue o jogo
-        pass
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_display ON obs_clientes_k (cliente_display)")
+    conn.commit()
     return conn
 
-def carregar_observacoes(conn) -> dict:
+def obs_listar(conn) -> pd.DataFrame:
+    return pd.read_sql_query("SELECT cliente_key, cliente_display, observacao, updated_at FROM obs_clientes_k", conn)
+
+def obs_dict(conn) -> dict:
     cur = conn.execute("SELECT cliente_key, observacao FROM obs_clientes_k")
     return {row[0]: (row[1] or "") for row in cur.fetchall()}
 
-def salvar_observacao(conn, cliente_display: str, observacao: str):
+def obs_salvar(conn, cliente_display: str, observacao: str):
     key = normalize_cliente(cliente_display)
     conn.execute(
         "INSERT INTO obs_clientes_k (cliente_key, cliente_display, observacao, updated_at) "
@@ -83,11 +70,30 @@ def salvar_observacao(conn, cliente_display: str, observacao: str):
         "cliente_display=excluded.cliente_display, "
         "observacao=excluded.observacao, "
         "updated_at=excluded.updated_at",
-        (key, cliente_display, observacao, datetime.now().isoformat(timespec="seconds"))
+        (key, cliente_display, observacao or "", datetime.now().isoformat(timespec="seconds"))
     )
     conn.commit()
 
-# ---------- Carga de dados ----------
+def obs_importar_csv(conn, file_bytes: bytes):
+    df = pd.read_csv(io.BytesIO(file_bytes), dtype=str).fillna("")
+    req_cols = {"cliente_display", "observacao"}
+    if not req_cols.issubset(set(map(str.lower, df.columns.str.lower()))):
+        st.error("CSV deve conter as colunas: cliente_display, observacao")
+        return
+    # normaliza nomes de colunas
+    cols = {c.lower(): c for c in df.columns}
+    for _, row in df.iterrows():
+        obs_salvar(conn, row[cols["cliente_display"]], row[cols["observacao"]])
+
+def obs_exportar_csv(conn) -> bytes:
+    df = obs_listar(conn)
+    if df.empty:
+        df = pd.DataFrame(columns=["cliente_display", "observacao", "updated_at"])
+    out = io.StringIO()
+    df[["cliente_display", "observacao", "updated_at"]].to_csv(out, index=False)
+    return out.getvalue().encode("utf-8")
+
+# 6) CARGA DE DADOS
 @st.cache_data(ttl=300)
 def load_data_from_url(url):
     try:
@@ -99,25 +105,26 @@ def load_data_from_url(url):
         st.info("Verifique se o link está correto e se o compartilhamento do arquivo está como 'Qualquer pessoa com o link'.")
         return pd.DataFrame(), "Erro na atualização"
 
-# --- Processamento ---
 def process_data(df_bruto):
     try:
         df = df_bruto.copy()
-        # 1) Remove a coluna em branco (índice 1)
+        # remove coluna em branco (índice 1)
         df = df.drop(columns=[1])
-        # 2) Define colunas
+        # renomeia colunas
         colunas_corretas = ["Base", "Descricao", "Data Ocorrencia", "Valor", "Cliente", "Cond Pagto SAP", "Dia Corte Fat."]
         if len(df.columns) == len(colunas_corretas):
             df.columns = colunas_corretas
         else:
-            st.error(f"O arquivo lido, após remover colunas em branco, tem {len(df.columns)} colunas, mas o programa esperava {len(colunas_corretas)}.")
+            st.error(f"O arquivo lido tem {len(df.columns)} colunas (esperado: {len(colunas_corretas)}).")
             return pd.DataFrame()
-        # 3) Conversões
+
+        # tipos / limpeza
         df["Data Ocorrencia"] = pd.to_datetime(df["Data Ocorrencia"], errors="coerce")
         df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
         df.dropna(subset=["Data Ocorrencia", "Valor", "Cliente"], inplace=True)
         df["Mês"] = df["Data Ocorrencia"].dt.to_period("M").astype(str)
-        # 4) Regra de cliente para cond. pagto V029
+
+        # regra V029
         df.loc[df['Cond Pagto SAP'].astype(str) == 'V029', 'Cliente'] = 'GRUPO MRV ENGENHARIA SA'
         return df
     except Exception as e:
@@ -125,7 +132,7 @@ def process_data(df_bruto):
         st.info("Ocorreu um erro inesperado durante o processamento dos dados.")
         return pd.DataFrame()
 
-# 4. UI
+# 7) UI
 st.image(LOGO_URL, width=200)
 st.title("Dashboard Remessas a Faturar")
 
@@ -136,52 +143,65 @@ if raw_df is not None and not raw_df.empty:
     df = process_data(raw_df)
 
     if not df.empty:
-        # --------- FILTROS ---------
+        # --------- Barra lateral: filtros e utilitários ---------
         st.sidebar.header("Filtros")
 
         bases = sorted(df["Base"].dropna().unique())
         if 'base_selection' not in st.session_state:
             st.session_state['base_selection'] = []
         with st.sidebar.expander("✔️ Filtrar por Base", expanded=True):
-            col1, col2 = st.columns(2)
-            if col1.button("Selecionar Todas", key='select_all_bases', use_container_width=True):
+            c1, c2 = st.columns(2)
+            if c1.button("Selecionar Todas", use_container_width=True):
                 st.session_state['base_selection'] = bases
                 st.rerun()
-            if col2.button("Limpar Todas", key='clear_all_bases', use_container_width=True):
+            if c2.button("Limpar Todas", use_container_width=True):
                 st.session_state['base_selection'] = []
                 st.rerun()
-            base_sel = st.multiselect("Selecione as Bases", options=bases, default=st.session_state['base_selection'], label_visibility="collapsed")
-            st.session_state['base_selection'] = base_sel
+            st.session_state['base_selection'] = st.multiselect(
+                "Selecione as Bases", options=bases, default=st.session_state['base_selection'], label_visibility="collapsed"
+            )
 
         descricoes = sorted(df["Descricao"].dropna().unique())
         if 'desc_selection' not in st.session_state:
             st.session_state['desc_selection'] = []
         with st.sidebar.expander("✔️ Filtrar por Descrição", expanded=True):
-            col3, col4 = st.columns(2)
-            if col3.button("Selecionar Todas", key='select_all_desc', use_container_width=True):
+            c3, c4 = st.columns(2)
+            if c3.button("Selecionar Todas", use_container_width=True):
                 st.session_state['desc_selection'] = descricoes
                 st.rerun()
-            if col4.button("Limpar Todas", key='clear_all_desc', use_container_width=True):
+            if c4.button("Limpar Todas", use_container_width=True):
                 st.session_state['desc_selection'] = []
                 st.rerun()
-            descricao_sel = st.multiselect("Selecione as Descrições", options=descricoes, default=st.session_state['desc_selection'], label_visibility="collapsed")
-            st.session_state['desc_selection'] = descricao_sel
+            st.session_state['desc_selection'] = st.multiselect(
+                "Selecione as Descrições", options=descricoes, default=st.session_state['desc_selection'], label_visibility="collapsed"
+            )
 
         meses = sorted(df["Mês"].dropna().unique(), reverse=True)
         if 'mes_selection' not in st.session_state:
             st.session_state['mes_selection'] = []
         with st.sidebar.expander("✔️ Filtrar por Mês", expanded=True):
-            col5, col6 = st.columns(2)
-            if col5.button("Selecionar Todos", key='select_all_meses', use_container_width=True):
+            c5, c6 = st.columns(2)
+            if c5.button("Selecionar Todos", use_container_width=True):
                 st.session_state['mes_selection'] = meses
                 st.rerun()
-            if col6.button("Limpar Todas", key='clear_all_meses', use_container_width=True):
+            if c6.button("Limpar Todas", use_container_width=True):
                 st.session_state['mes_selection'] = []
                 st.rerun()
-            mes_sel = st.multiselect("Selecione os Meses", options=meses, default=st.session_state['mes_selection'], label_visibility="collapsed")
-            st.session_state['mes_selection'] = mes_sel
+            st.session_state['mes_selection'] = st.multiselect(
+                "Selecione os Meses", options=meses, default=st.session_state['mes_selection'], label_visibility="collapsed"
+            )
 
-        # --------- APLICAÇÃO DOS FILTROS ---------
+        # Utilitários de Observações
+        st.sidebar.header("Observações (backup)")
+        conn = get_db_conn()
+        up_file = st.sidebar.file_uploader("Restaurar observações (CSV)", type=["csv"])
+        if up_file is not None:
+            obs_importar_csv(conn, up_file.read())
+            st.sidebar.success("Observações importadas com sucesso.")
+        down_bytes = obs_exportar_csv(conn)
+        st.sidebar.download_button("Baixar observações (CSV)", data=down_bytes, file_name="observacoes_clientes.csv", mime="text/csv")
+
+        # --------- Aplicação dos filtros ---------
         df_filtrado = df.copy()
         if st.session_state['base_selection']:
             df_filtrado = df_filtrado[df_filtrado['Base'].isin(st.session_state['base_selection'])]
@@ -204,15 +224,15 @@ if raw_df is not None and not raw_df.empty:
         st.markdown("---")
 
         # --------- GRÁFICOS ---------
-        chart_col1, chart_col2 = st.columns(2)
-        with chart_col1:
+        cA, cB = st.columns(2)
+        with cA:
             st.subheader("Evolução de Valores por Mês")
             agrupado_mes = df_filtrado.groupby("Mês").agg({"Valor": "sum"}).reset_index().sort_values("Mês")
             fig_bar = px.bar(agrupado_mes, x="Mês", y="Valor", text_auto='.2s', labels={"Valor": "Valor (R$)", "Mês": "Mês de Referência"})
             fig_bar.update_traces(textposition="outside")
             st.plotly_chart(fig_bar, use_container_width=True)
 
-        with chart_col2:
+        with cB:
             st.subheader("Distribuição por Descrição")
             agrupado_desc = df_filtrado.groupby("Descricao").agg({"Valor": "sum"}).reset_index()
             top_n = 10
@@ -232,16 +252,15 @@ if raw_df is not None and not raw_df.empty:
         fig_base.update_layout(xaxis={'categoryorder': 'total descending'})
         st.plotly_chart(fig_base, use_container_width=True)
 
-        # --------- RESUMO POR CLIENTE + OBSERVAÇÕES (CHAVE NORMALIZADA) ---------
+        # --------- RESUMO POR CLIENTE + OBSERVAÇÕES ---------
         with st.expander("Ver resumo por cliente", expanded=False):
             st.markdown("#### Somatório por Cliente (com base nos filtros aplicados)")
-
             resumo_cliente = df_filtrado.groupby("Cliente").agg(
                 Valor_Total=('Valor', 'sum'),
                 Qtde_Remessas=('Base', 'count')
             ).reset_index().sort_values("Valor_Total", ascending=False)
 
-            # tabela exibida (formatação)
+            # exibição formatada
             resumo_cliente_exib = resumo_cliente.copy()
             resumo_cliente_exib['Valor_Total'] = resumo_cliente_exib['Valor_Total'].apply(
                 lambda x: locale.format_string('R$ %.2f', x, grouping=True)
@@ -250,12 +269,10 @@ if raw_df is not None and not raw_df.empty:
                 lambda x: locale.format_string('%d', x, grouping=True)
             )
 
-            conn = get_db_conn()
-            obs_dict = carregar_observacoes(conn)
-
-            # Observação vinda do banco por chave normalizada
+            # carrega observações do banco por chave normalizada
+            obs_map = obs_dict(conn)
             resumo_cliente_exib['Observação'] = resumo_cliente_exib['Cliente'].map(
-                lambda c: obs_dict.get(normalize_cliente(c), "")
+                lambda c: obs_map.get(normalize_cliente(c), "")
             )
 
             edited_df = st.data_editor(
@@ -274,14 +291,13 @@ if raw_df is not None and not raw_df.empty:
                 },
             )
 
-            # salvar alterações no banco (usa cliente_display atual + chave normalizada)
-for rec in edited_df[['Cliente', 'Observação']].to_dict(orient='records'):
-    cliente = rec.get('Cliente', '')
-    obs = rec.get('Observação', '')
-    if pd.isna(obs):
-        obs = ''
-    salvar_observacao(conn, cliente_display=cliente, observacao=obs)
-
+            # salva alterações no banco (robusto a acentos/espaços na coluna)
+            for rec in edited_df[['Cliente', 'Observação']].to_dict(orient='records'):
+                cliente = rec.get('Cliente', '')
+                obs = rec.get('Observação', '')
+                if pd.isna(obs):
+                    obs = ''
+                obs_salvar(conn, cliente_display=cliente, observacao=obs)
 
 else:
     st.warning("Não há dados disponíveis para exibição ou ocorreu um erro no carregamento.")
