@@ -80,7 +80,6 @@ def obs_importar_csv(conn, file_bytes: bytes):
     if not req_cols.issubset(set(map(str.lower, df.columns.str.lower()))):
         st.error("CSV deve conter as colunas: cliente_display, observacao")
         return
-    # normaliza nomes de colunas
     cols = {c.lower(): c for c in df.columns}
     for _, row in df.iterrows():
         obs_salvar(conn, row[cols["cliente_display"]], row[cols["observacao"]])
@@ -108,9 +107,7 @@ def load_data_from_url(url):
 def process_data(df_bruto):
     try:
         df = df_bruto.copy()
-        # remove coluna em branco (índice 1)
-        df = df.drop(columns=[1])
-        # renomeia colunas
+        df = df.drop(columns=[1])  # remove coluna em branco
         colunas_corretas = ["Base", "Descricao", "Data Ocorrencia", "Valor", "Cliente", "Cond Pagto SAP", "Dia Corte Fat."]
         if len(df.columns) == len(colunas_corretas):
             df.columns = colunas_corretas
@@ -118,13 +115,10 @@ def process_data(df_bruto):
             st.error(f"O arquivo lido tem {len(df.columns)} colunas (esperado: {len(colunas_corretas)}).")
             return pd.DataFrame()
 
-        # tipos / limpeza
         df["Data Ocorrencia"] = pd.to_datetime(df["Data Ocorrencia"], errors="coerce")
         df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
         df.dropna(subset=["Data Ocorrencia", "Valor", "Cliente"], inplace=True)
         df["Mês"] = df["Data Ocorrencia"].dt.to_period("M").astype(str)
-
-        # regra V029
         df.loc[df['Cond Pagto SAP'].astype(str) == 'V029', 'Cliente'] = 'GRUPO MRV ENGENHARIA SA'
         return df
     except Exception as e:
@@ -141,7 +135,6 @@ st.caption(f"Dados atualizados em: {update_info}")
 
 if raw_df is not None and not raw_df.empty:
     df = process_data(raw_df)
-
     if not df.empty:
         # --------- Barra lateral: filtros e utilitários ---------
         st.sidebar.header("Filtros")
@@ -151,10 +144,10 @@ if raw_df is not None and not raw_df.empty:
             st.session_state['base_selection'] = []
         with st.sidebar.expander("✔️ Filtrar por Base", expanded=True):
             c1, c2 = st.columns(2)
-            if c1.button("Selecionar Todas", use_container_width=True):
+            if c1.button("Selecionar Todas", key="btn_select_all_base", use_container_width=True):
                 st.session_state['base_selection'] = bases
                 st.rerun()
-            if c2.button("Limpar Todas", use_container_width=True):
+            if c2.button("Limpar Todas", key="btn_clear_all_base", use_container_width=True):
                 st.session_state['base_selection'] = []
                 st.rerun()
             st.session_state['base_selection'] = st.multiselect(
@@ -166,10 +159,10 @@ if raw_df is not None and not raw_df.empty:
             st.session_state['desc_selection'] = []
         with st.sidebar.expander("✔️ Filtrar por Descrição", expanded=True):
             c3, c4 = st.columns(2)
-            if c3.button("Selecionar Todas", use_container_width=True):
+            if c3.button("Selecionar Todas", key="btn_select_all_desc", use_container_width=True):
                 st.session_state['desc_selection'] = descricoes
                 st.rerun()
-            if c4.button("Limpar Todas", use_container_width=True):
+            if c4.button("Limpar Todas", key="btn_clear_all_desc", use_container_width=True):
                 st.session_state['desc_selection'] = []
                 st.rerun()
             st.session_state['desc_selection'] = st.multiselect(
@@ -181,17 +174,17 @@ if raw_df is not None and not raw_df.empty:
             st.session_state['mes_selection'] = []
         with st.sidebar.expander("✔️ Filtrar por Mês", expanded=True):
             c5, c6 = st.columns(2)
-            if c5.button("Selecionar Todos", use_container_width=True):
+            if c5.button("Selecionar Todos", key="btn_select_all_mes", use_container_width=True):
                 st.session_state['mes_selection'] = meses
                 st.rerun()
-            if c6.button("Limpar Todas", use_container_width=True):
+            if c6.button("Limpar Todas", key="btn_clear_all_mes", use_container_width=True):
                 st.session_state['mes_selection'] = []
                 st.rerun()
             st.session_state['mes_selection'] = st.multiselect(
                 "Selecione os Meses", options=meses, default=st.session_state['mes_selection'], label_visibility="collapsed"
             )
 
-        # Utilitários de Observações
+        # Utilitários Observações
         st.sidebar.header("Observações (backup)")
         conn = get_db_conn()
         up_file = st.sidebar.file_uploader("Restaurar observações (CSV)", type=["csv"])
@@ -260,7 +253,6 @@ if raw_df is not None and not raw_df.empty:
                 Qtde_Remessas=('Base', 'count')
             ).reset_index().sort_values("Valor_Total", ascending=False)
 
-            # exibição formatada
             resumo_cliente_exib = resumo_cliente.copy()
             resumo_cliente_exib['Valor_Total'] = resumo_cliente_exib['Valor_Total'].apply(
                 lambda x: locale.format_string('R$ %.2f', x, grouping=True)
@@ -269,7 +261,6 @@ if raw_df is not None and not raw_df.empty:
                 lambda x: locale.format_string('%d', x, grouping=True)
             )
 
-            # carrega observações do banco por chave normalizada
             obs_map = obs_dict(conn)
             resumo_cliente_exib['Observação'] = resumo_cliente_exib['Cliente'].map(
                 lambda c: obs_map.get(normalize_cliente(c), "")
@@ -291,7 +282,6 @@ if raw_df is not None and not raw_df.empty:
                 },
             )
 
-            # salva alterações no banco (robusto a acentos/espaços na coluna)
             for rec in edited_df[['Cliente', 'Observação']].to_dict(orient='records'):
                 cliente = rec.get('Cliente', '')
                 obs = rec.get('Observação', '')
