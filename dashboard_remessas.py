@@ -275,11 +275,13 @@ if raw_df is not None and not raw_df.empty:
             )
 
             # salvar alterações no banco (usa cliente_display atual + chave normalizada)
-            for row in edited_df.itertuples(index=False):
-                salvar_observacao(
-                    cliente_display=row.Cliente,
-                    observacao=getattr(row, "Observação") or ""
-                )
+for rec in edited_df[['Cliente', 'Observação']].to_dict(orient='records'):
+    cliente = rec.get('Cliente', '')
+    obs = rec.get('Observação', '')
+    if pd.isna(obs):
+        obs = ''
+    salvar_observacao(conn, cliente_display=cliente, observacao=obs)
+
 
 else:
     st.warning("Não há dados disponíveis para exibição ou ocorreu um erro no carregamento.")
