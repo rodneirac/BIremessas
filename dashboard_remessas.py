@@ -24,7 +24,7 @@ LOGO_URL = "https://raw.githubusercontent.com/rodneirac/BIremessas/main/logo.png
 
 # 4) NORMALIZAÇÃO DE CHAVE DE CLIENTE
 def normalize_cliente(s) -> str:
-    """Gera uma chave estável para o cliente: maiúsculas, sem acentos e sem pontuação estranha."""
+    """Gera chave estável: maiúsculas, sem acentos/pontuação, espaços colapsados."""
     if s is None:
         return ""
     if not isinstance(s, str):
@@ -44,10 +44,10 @@ def get_db_conn():
     conn = sqlite3.connect(DB_PATH.as_posix(), check_same_thread=False)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS obs_clientes_k (
-            cliente_key TEXT PRIMARY KEY,
+            cliente_key   TEXT PRIMARY KEY,
             cliente_display TEXT,
-            observacao TEXT DEFAULT '',
-            updated_at TEXT
+            observacao    TEXT DEFAULT '',
+            updated_at    TEXT
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_display ON obs_clientes_k (cliente_display)")
@@ -61,17 +61,22 @@ def obs_dict(conn) -> dict:
     cur = conn.execute("SELECT cliente_key, observacao FROM obs_clientes_k")
     return {row[0]: (row[1] or "") for row in cur.fetchall()}
 
+# >>> versão compatível de salvar (UPDATE e, se não afetou, INSERT)
 def obs_salvar(conn, cliente_display: str, observacao: str):
     key = normalize_cliente(cliente_display)
-    conn.execute(
-        "INSERT INTO obs_clientes_k (cliente_key, cliente_display, observacao, updated_at) "
-        "VALUES (?, ?, ?, ?) "
-        "ON CONFLICT(cliente_key) DO UPDATE SET "
-        "cliente_display=excluded.cliente_display, "
-        "observacao=excluded.observacao, "
-        "updated_at=excluded.updated_at",
-        (key, cliente_display, observacao or "", datetime.now().isoformat(timespec="seconds"))
+    ts = datetime.now().isoformat(timespec="seconds")
+    cur = conn.execute(
+        "UPDATE obs_clientes_k "
+        "SET cliente_display = ?, observacao = ?, updated_at = ? "
+        "WHERE cliente_key = ?",
+        (cliente_display, observacao or "", ts, key)
     )
+    if cur.rowcount == 0:
+        conn.execute(
+            "INSERT INTO obs_clientes_k (cliente_key, cliente_display, observacao, updated_at) "
+            "VALUES (?, ?, ?, ?)",
+            (key, cliente_display, observacao or "", ts)
+        )
     conn.commit()
 
 def obs_importar_csv(conn, file_bytes: bytes):
@@ -92,7 +97,7 @@ def obs_exportar_csv(conn) -> bytes:
     df[["cliente_display", "observacao", "updated_at"]].to_csv(out, index=False)
     return out.getvalue().encode("utf-8")
 
-# 6) CARGA DE DADOS
+# 6) CARGA E PROCESSAMENTO DE DADOS
 @st.cache_data(ttl=300)
 def load_data_from_url(url):
     try:
@@ -136,7 +141,7 @@ st.caption(f"Dados atualizados em: {update_info}")
 if raw_df is not None and not raw_df.empty:
     df = process_data(raw_df)
     if not df.empty:
-        # --------- Barra lateral: filtros e utilitários ---------
+        # --------- Filtros ---------
         st.sidebar.header("Filtros")
 
         bases = sorted(df["Base"].dropna().unique())
@@ -184,7 +189,7 @@ if raw_df is not None and not raw_df.empty:
                 "Selecione os Meses", options=meses, default=st.session_state['mes_selection'], label_visibility="collapsed"
             )
 
-        # Utilitários Observações
+        # --------- Utilitários de Observações ---------
         st.sidebar.header("Observações (backup)")
         conn = get_db_conn()
         up_file = st.sidebar.file_uploader("Restaurar observações (CSV)", type=["csv"])
