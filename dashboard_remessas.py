@@ -6,6 +6,8 @@ from datetime import datetime
 import locale
 import sqlite3
 from pathlib import Path
+import unicodedata
+import re
 
 # 2. CONFIGURAÇÕES INICIAIS DA PÁGINA E LOCALIDADE
 st.set_page_config(layout="wide")
@@ -19,31 +21,69 @@ ID_ARQUIVO_DRIVE = "111jEo-wgeRKdXY7nq9laKeXRfifovHRR"
 URL_DOWNLOAD_DIRETO = f"https://drive.google.com/uc?export=download&id={ID_ARQUIVO_DRIVE}"
 LOGO_URL = "https://raw.githubusercontent.com/rodneirac/BIremessas/main/logo.png"
 
+# ---------- Normalização de chaves ----------
+def normalize_cliente(s) -> str:
+    if s is None:
+        return ""
+    if not isinstance(s, str):
+        s = str(s)
+    s = s.strip().upper()
+    # remove acentos
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    # remove pontuação estranha, mantém letras, números e espaço
+    s = re.sub(r"[^A-Z0-9 ]+", " ", s)
+    # colapsa espaços
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
 # ---------- Persistência das observações (SQLite) ----------
 DB_PATH = Path("observacoes.db")
 
 @st.cache_resource
 def get_db_conn():
     conn = sqlite3.connect(DB_PATH.as_posix(), check_same_thread=False)
+    # Tabela nova baseada em chave normalizada
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS obs_clientes (
-            cliente TEXT PRIMARY KEY,
+        CREATE TABLE IF NOT EXISTS obs_clientes_k (
+            cliente_key TEXT PRIMARY KEY,
+            cliente_display TEXT,
             observacao TEXT DEFAULT '',
             updated_at TEXT
         )
     """)
-    conn.commit()
+    # Migração simples da tabela antiga, se existir
+    try:
+        cur = conn.execute("SELECT cliente, observacao FROM obs_clientes")
+        rows = cur.fetchall()
+        for cli, obs in rows:
+            key = normalize_cliente(cli)
+            conn.execute(
+                "INSERT INTO obs_clientes_k (cliente_key, cliente_display, observacao, updated_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(cliente_key) DO NOTHING",
+                (key, cli, obs or "", datetime.now().isoformat(timespec="seconds"))
+            )
+        conn.commit()
+    except sqlite3.OperationalError:
+        # tabela antiga não existe — segue o jogo
+        pass
     return conn
 
 def carregar_observacoes(conn) -> dict:
-    cur = conn.execute("SELECT cliente, observacao FROM obs_clientes")
+    cur = conn.execute("SELECT cliente_key, observacao FROM obs_clientes_k")
     return {row[0]: (row[1] or "") for row in cur.fetchall()}
 
-def salvar_observacao(conn, cliente: str, observacao: str):
+def salvar_observacao(conn, cliente_display: str, observacao: str):
+    key = normalize_cliente(cliente_display)
     conn.execute(
-        "INSERT INTO obs_clientes (cliente, observacao, updated_at) VALUES (?, ?, ?) "
-        "ON CONFLICT(cliente) DO UPDATE SET observacao=excluded.observacao, updated_at=excluded.updated_at",
-        (cliente, observacao, datetime.now().isoformat(timespec="seconds"))
+        "INSERT INTO obs_clientes_k (cliente_key, cliente_display, observacao, updated_at) "
+        "VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(cliente_key) DO UPDATE SET "
+        "cliente_display=excluded.cliente_display, "
+        "observacao=excluded.observacao, "
+        "updated_at=excluded.updated_at",
+        (key, cliente_display, observacao, datetime.now().isoformat(timespec="seconds"))
     )
     conn.commit()
 
@@ -188,11 +228,11 @@ if raw_df is not None and not raw_df.empty:
 
         st.subheader("Valor Total por Base")
         agrupado_base = df_filtrado.groupby("Base").agg({"Valor": "sum"}).reset_index().sort_values("Valor", ascending=False)
-        fig_base = px.bar(agrupado_base, x="Base", y="Valor", title="Faturamento por Base", text_auto='.2s', color_discrete_sequence=['#2ca02c'] * len(agrupado_base))
+        fig_base = px.bar(agrupado_base, x="Base", y="Valor", title="Faturamento por Base", text_auto='.2s')
         fig_base.update_layout(xaxis={'categoryorder': 'total descending'})
         st.plotly_chart(fig_base, use_container_width=True)
 
-        # --------- RESUMO POR CLIENTE + OBSERVAÇÕES (PERSISTE EM DISCO) ---------
+        # --------- RESUMO POR CLIENTE + OBSERVAÇÕES (CHAVE NORMALIZADA) ---------
         with st.expander("Ver resumo por cliente", expanded=False):
             st.markdown("#### Somatório por Cliente (com base nos filtros aplicados)")
 
@@ -201,7 +241,7 @@ if raw_df is not None and not raw_df.empty:
                 Qtde_Remessas=('Base', 'count')
             ).reset_index().sort_values("Valor_Total", ascending=False)
 
-            # tabela para exibição com formatação
+            # tabela exibida (formatação)
             resumo_cliente_exib = resumo_cliente.copy()
             resumo_cliente_exib['Valor_Total'] = resumo_cliente_exib['Valor_Total'].apply(
                 lambda x: locale.format_string('R$ %.2f', x, grouping=True)
@@ -210,13 +250,12 @@ if raw_df is not None and not raw_df.empty:
                 lambda x: locale.format_string('%d', x, grouping=True)
             )
 
-            # carregar observações do banco
             conn = get_db_conn()
             obs_dict = carregar_observacoes(conn)
 
-            # coluna Observação alimentada pelo banco
+            # Observação vinda do banco por chave normalizada
             resumo_cliente_exib['Observação'] = resumo_cliente_exib['Cliente'].map(
-                lambda c: obs_dict.get(c, "")
+                lambda c: obs_dict.get(normalize_cliente(c), "")
             )
 
             edited_df = st.data_editor(
@@ -235,9 +274,12 @@ if raw_df is not None and not raw_df.empty:
                 },
             )
 
-            # salvar alterações no banco (apenas linhas visíveis)
+            # salvar alterações no banco (usa cliente_display atual + chave normalizada)
             for row in edited_df.itertuples(index=False):
-                salvar_observacao(conn, row.Cliente, getattr(row, "Observação") or "")
+                salvar_observacao(
+                    cliente_display=row.Cliente,
+                    observacao=getattr(row, "Observação") or ""
+                )
 
 else:
     st.warning("Não há dados disponíveis para exibição ou ocorreu um erro no carregamento.")
