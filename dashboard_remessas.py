@@ -18,7 +18,7 @@ except locale.Error:
     st.warning("Localidade 'pt_BR.UTF-8' não encontrada...")
 
 # 3) CONSTANTES
-ID_ARQUIVO_DRIVE = "111jEo-wgeRKdXY7nq9laKeXRfifovHRR"
+ID_ARQUIVO_DRIVE = "1wqnGdfpCE5Go7wlITqtfxrxpHxVpTzCT"
 URL_DOWNLOAD_DIRETO = f"https://drive.google.com/uc?export=download&id={ID_ARQUIVO_DRIVE}"
 LOGO_URL = "https://raw.githubusercontent.com/rodneirac/BIremessas/main/logo.png"
 
