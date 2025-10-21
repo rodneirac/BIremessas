@@ -18,9 +18,9 @@ except locale.Error:
     st.warning("Localidade 'pt_BR.UTF-8' não encontrada...")
 
 # 3) CONSTANTES
-ID_ARQUIVO_DRIVE = "1wqnGdfpCE5Go7wlITqtfxrxpHxVpTzCT"
-URL_DOWNLOAD_DIRETO = f"https://drive.google.com/uc?export=download&id={ID_ARQUIVO_DRIVE}"
-LOGO_URL = "https://raw.githubusercontent.com/rodneirac/BIremessas/main/logo.png"
+ID_ARQUIVO_DRIVE = "1wqnGdfpCE5Go7wlITqtfxrxpHxVpTzCT" # Mantido
+URL_DOWNLOAD_DIRETO = f"https.drive.google.com/uc?export=download&id={ID_ARQUIVO_DRIVE}" # Mantido
+LOGO_URL = "https.raw.githubusercontent.com/rodneirac/BIremessas/main/logo.png"
 
 # 4) NORMALIZAÇÃO DE CHAVE DE CLIENTE
 def normalize_cliente(s) -> str:
@@ -44,10 +44,10 @@ def get_db_conn():
     conn = sqlite3.connect(DB_PATH.as_posix(), check_same_thread=False)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS obs_clientes_k (
-            cliente_key   TEXT PRIMARY KEY,
+            cliente_key    TEXT PRIMARY KEY,
             cliente_display TEXT,
-            observacao    TEXT DEFAULT '',
-            updated_at    TEXT
+            observacao     TEXT DEFAULT '',
+            updated_at     TEXT
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_display ON obs_clientes_k (cliente_display)")
@@ -98,36 +98,76 @@ def obs_exportar_csv(conn) -> bytes:
     return out.getvalue().encode("utf-8")
 
 # 6) CARGA E PROCESSAMENTO DE DADOS
+# <<< FUNÇÃO MODIFICADA PARA LER CSV DA URL >>>
 @st.cache_data(ttl=300)
 def load_data_from_url(url):
     try:
-        df = pd.read_excel(url, engine="openpyxl", skiprows=3, header=None)
-        update_time = f"**{datetime.now().strftime('%d/%m/%Y às %H:%M')}** (dados do Google Drive)"
+        # Tenta ler como UTF-8
+        try:
+            df = pd.read_csv(url)
+        except UnicodeDecodeError:
+            # Se falhar, tenta como Latin1 (comum no Brasil)
+            df = pd.read_csv(url, encoding='latin1')
+            
+        update_time = f"**{datetime.now().strftime('%d/%m/%Y às %H:%M')}** (dados CSV do Google Drive)"
         return df, update_time
     except Exception as e:
-        st.error(f"Erro ao carregar dados da URL do Google Drive: {e}")
+        st.error(f"Erro ao carregar DADOS CSV da URL do Google Drive: {e}")
         st.info("Verifique se o link está correto e se o compartilhamento do arquivo está como 'Qualquer pessoa com o link'.")
         return pd.DataFrame(), "Erro na atualização"
 
+# <<< FUNÇÃO MODIFICADA PARA PROCESSAR O NOVO FORMATO CSV >>>
 def process_data(df_bruto):
     try:
         df = df_bruto.copy()
-        df = df.drop(columns=[1])  # remove coluna em branco
-        colunas_corretas = ["Base", "Descricao", "Data Ocorrencia", "Valor", "Cliente", "Cond Pagto SAP", "Dia Corte Fat."]
-        if len(df.columns) == len(colunas_corretas):
-            df.columns = colunas_corretas
-        else:
-            st.error(f"O arquivo lido tem {len(df.columns)} colunas (esperado: {len(colunas_corretas)}).")
+
+        # Mapeamento das colunas do NOVO CSV para as colunas ESPERADAS pelo dashboard
+        colunas_mapeadas = {
+            "BASE": "Base",
+            "Descricao2": "Descricao",
+            "Data_Ocorrencia2": "Data Ocorrencia",
+            "VL_VALOR": "Valor",
+            "NM_CLIENTE2": "Cliente",
+            "Condicao_Pagto_SAP": "Cond Pagto SAP",
+            "NU_DIA_CORTE_FATURAMENTO": "Dia Corte Fat."
+        }
+        
+        # Verificar se todas as colunas necessárias existem
+        colunas_necessarias_csv = list(colunas_mapeadas.keys())
+        colunas_faltando = [col for col in colunas_necessarias_csv if col not in df.columns]
+        
+        if colunas_faltando:
+            st.error(f"Erro no formato do CSV. Colunas não encontradas: {', '.join(colunas_faltando)}")
+            st.info(f"Colunas encontradas: {', '.join(df.columns)}")
             return pd.DataFrame()
 
-        df["Data Ocorrencia"] = pd.to_datetime(df["Data Ocorrencia"], errors="coerce")
+        # Renomear as colunas para o padrão do dashboard
+        df = df.rename(columns=colunas_mapeadas)
+        
+        # Manter apenas as colunas que o dashboard realmente usa
+        colunas_esperadas = list(colunas_mapeadas.values())
+        df = df[colunas_esperadas]
+
+        # --- Transformações (similares ao script original) ---
+
+        # Converter Data Ocorrencia (formato MM/DD/YYYY do CSV)
+        df["Data Ocorrencia"] = pd.to_datetime(df["Data Ocorrencia"], format='%m/%d/%Y', errors="coerce")
+        
+        # Converter Valor para numérico
         df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
+        
+        # Remover linhas com dados essenciais nulos
         df.dropna(subset=["Data Ocorrencia", "Valor", "Cliente"], inplace=True)
+        
+        # Criar coluna 'Mês'
         df["Mês"] = df["Data Ocorrencia"].dt.to_period("M").astype(str)
+        
+        # Aplicar regra de negócio específica (mantida do original)
         df.loc[df['Cond Pagto SAP'].astype(str) == 'V029', 'Cliente'] = 'GRUPO MRV ENGENHARIA SA'
+        
         return df
     except Exception as e:
-        st.error(f"Erro ao processar os dados: {e}")
+        st.error(f"Erro ao processar os dados do CSV: {e}")
         st.info("Ocorreu um erro inesperado durante o processamento dos dados.")
         return pd.DataFrame()
 
@@ -135,6 +175,7 @@ def process_data(df_bruto):
 st.image(LOGO_URL, width=200)
 st.title("Dashboard Remessas a Faturar")
 
+# A chamada da função é a mesma, mas ela agora baixa e processa o CSV
 raw_df, update_info = load_data_from_url(URL_DOWNLOAD_DIRETO)
 st.caption(f"Dados atualizados em: {update_info}")
 
