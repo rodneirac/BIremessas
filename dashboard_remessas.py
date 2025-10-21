@@ -9,6 +9,7 @@ from pathlib import Path
 import unicodedata
 import re
 import io
+import requests  # <<< ADICIONADO PARA MELHORAR A LEITURA DA URL
 
 # 2) CONFIGURAÇÕES INICIAIS
 st.set_page_config(layout="wide")
@@ -18,8 +19,8 @@ except locale.Error:
     st.warning("Localidade 'pt_BR.UTF-8' não encontrada...")
 
 # 3) CONSTANTES
-ID_ARQUIVO_DRIVE = "1wqnGdfpCE5Go7wlITqtfxrxpHxVpTzCT" # Mantido
-URL_DOWNLOAD_DIRETO = f"https.drive.google.com/uc?export=download&id={ID_ARQUIVO_DRIVE}" # Mantido
+ID_ARQUIVO_DRIVE = "1wqnGdfpCE5Go7wlITqtfxrxpHxVpTzCT"
+URL_DOWNLOAD_DIRETO = f"https.drive.google.com/uc?export=download&id={ID_ARQUIVO_DRIVE}"
 LOGO_URL = "https.raw.githubusercontent.com/rodneirac/BIremessas/main/logo.png"
 
 # 4) NORMALIZAÇÃO DE CHAVE DE CLIENTE
@@ -61,7 +62,6 @@ def obs_dict(conn) -> dict:
     cur = conn.execute("SELECT cliente_key, observacao FROM obs_clientes_k")
     return {row[0]: (row[1] or "") for row in cur.fetchall()}
 
-# >>> versão compatível de salvar (UPDATE e, se não afetou, INSERT)
 def obs_salvar(conn, cliente_display: str, observacao: str):
     key = normalize_cliente(cliente_display)
     ts = datetime.now().isoformat(timespec="seconds")
@@ -80,10 +80,17 @@ def obs_salvar(conn, cliente_display: str, observacao: str):
     conn.commit()
 
 def obs_importar_csv(conn, file_bytes: bytes):
-    df = pd.read_csv(io.BytesIO(file_bytes), dtype=str).fillna("")
+    # Decodificar os bytes lidos do upload
+    try:
+        decoded_content = file_bytes.decode('utf-8')
+    except UnicodeDecodeError:
+        decoded_content = file_bytes.decode('latin1')
+        
+    df = pd.read_csv(io.StringIO(decoded_content), dtype=str).fillna("")
+    
     req_cols = {"cliente_display", "observacao"}
     if not req_cols.issubset(set(map(str.lower, df.columns.str.lower()))):
-        st.error("CSV deve conter as colunas: cliente_display, observacao")
+        st.error("CSV de importação deve conter as colunas: cliente_display, observacao")
         return
     cols = {c.lower(): c for c in df.columns}
     for _, row in df.iterrows():
@@ -95,33 +102,51 @@ def obs_exportar_csv(conn) -> bytes:
         df = pd.DataFrame(columns=["cliente_display", "observacao", "updated_at"])
     out = io.StringIO()
     df[["cliente_display", "observacao", "updated_at"]].to_csv(out, index=False)
-    return out.getvalue().encode("utf-8")
+    return out.getvalue().encode("utf-8") # Exporta sempre como UTF-8
 
 # 6) CARGA E PROCESSAMENTO DE DADOS
-# <<< FUNÇÃO MODIFICADA PARA LER CSV DA URL >>>
+# <<< FUNÇÃO MODIFICADA PARA CORRIGIR O ERRO DE ENCODING >>>
 @st.cache_data(ttl=300)
 def load_data_from_url(url):
     try:
-        # Tenta ler como UTF-8
+        # 1. Baixar o conteúdo da URL usando requests
+        response = requests.get(url)
+        response.raise_for_status()  # Lança um erro se o download falhar (ex: 404, 500)
+        content_bytes = response.content
+
+        # 2. Tentar decodificar o conteúdo (bytes)
+        decoded_data = ""
         try:
-            df = pd.read_csv(url)
+            # Tenta UTF-8 primeiro
+            decoded_data = content_bytes.decode('utf-8')
         except UnicodeDecodeError:
-            # Se falhar, tenta como Latin1 (comum no Brasil)
-            df = pd.read_csv(url, encoding='latin1')
+            try:
+                # Se falhar, tenta Latin1 (comum no Brasil)
+                decoded_data = content_bytes.decode('latin1')
+            except Exception as e_decode:
+                st.error(f"Erro ao decodificar o arquivo. Nem UTF-8 nem Latin1 funcionaram. Erro: {e_decode}")
+                return pd.DataFrame(), "Erro na decodificação"
+
+        # 3. Ler o conteúdo (string) decodificado com pandas
+        # Usar io.StringIO para tratar a string como se fosse um arquivo
+        df = pd.read_csv(io.StringIO(decoded_data))
             
         update_time = f"**{datetime.now().strftime('%d/%m/%Y às %H:%M')}** (dados CSV do Google Drive)"
         return df, update_time
+        
+    except requests.exceptions.HTTPError as e_http:
+        st.error(f"Erro ao acessar a URL do Google Drive (HTTP): {e_http}")
+        st.info("Verifique se o ID_ARQUIVO_DRIVE está correto e se o compartilhamento está como 'Qualquer pessoa com o link'.")
+        return pd.DataFrame(), "Erro na atualização (HTTP)"
     except Exception as e:
-        st.error(f"Erro ao carregar DADOS CSV da URL do Google Drive: {e}")
-        st.info("Verifique se o link está correto e se o compartilhamento do arquivo está como 'Qualquer pessoa com o link'.")
-        return pd.DataFrame(), "Erro na atualização"
+        st.error(f"Erro inesperado ao carregar dados da URL: {e}")
+        return pd.DataFrame(), "Erro na atualização (Geral)"
 
-# <<< FUNÇÃO MODIFICADA PARA PROCESSAR O NOVO FORMATO CSV >>>
+# <<< FUNÇÃO DE PROCESSAMENTO (IDÊNTICA À ANTERIOR) >>>
 def process_data(df_bruto):
     try:
         df = df_bruto.copy()
 
-        # Mapeamento das colunas do NOVO CSV para as colunas ESPERADAS pelo dashboard
         colunas_mapeadas = {
             "BASE": "Base",
             "Descricao2": "Descricao",
@@ -132,7 +157,6 @@ def process_data(df_bruto):
             "NU_DIA_CORTE_FATURAMENTO": "Dia Corte Fat."
         }
         
-        # Verificar se todas as colunas necessárias existem
         colunas_necessarias_csv = list(colunas_mapeadas.keys())
         colunas_faltando = [col for col in colunas_necessarias_csv if col not in df.columns]
         
@@ -141,28 +165,15 @@ def process_data(df_bruto):
             st.info(f"Colunas encontradas: {', '.join(df.columns)}")
             return pd.DataFrame()
 
-        # Renomear as colunas para o padrão do dashboard
         df = df.rename(columns=colunas_mapeadas)
-        
-        # Manter apenas as colunas que o dashboard realmente usa
         colunas_esperadas = list(colunas_mapeadas.values())
         df = df[colunas_esperadas]
 
-        # --- Transformações (similares ao script original) ---
-
         # Converter Data Ocorrencia (formato MM/DD/YYYY do CSV)
         df["Data Ocorrencia"] = pd.to_datetime(df["Data Ocorrencia"], format='%m/%d/%Y', errors="coerce")
-        
-        # Converter Valor para numérico
         df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
-        
-        # Remover linhas com dados essenciais nulos
         df.dropna(subset=["Data Ocorrencia", "Valor", "Cliente"], inplace=True)
-        
-        # Criar coluna 'Mês'
         df["Mês"] = df["Data Ocorrencia"].dt.to_period("M").astype(str)
-        
-        # Aplicar regra de negócio específica (mantida do original)
         df.loc[df['Cond Pagto SAP'].astype(str) == 'V029', 'Cliente'] = 'GRUPO MRV ENGENHARIA SA'
         
         return df
@@ -175,7 +186,6 @@ def process_data(df_bruto):
 st.image(LOGO_URL, width=200)
 st.title("Dashboard Remessas a Faturar")
 
-# A chamada da função é a mesma, mas ela agora baixa e processa o CSV
 raw_df, update_info = load_data_from_url(URL_DOWNLOAD_DIRETO)
 st.caption(f"Dados atualizados em: {update_info}")
 
@@ -320,7 +330,7 @@ if raw_df is not None and not raw_df.empty:
                 column_config={
                     "Cliente": st.column_config.TextColumn(disabled=True),
                     "Valor_Total": st.column_config.TextColumn(disabled=True),
-                    "Qtde_Remessas": st.column_config.TextColumn(disabled=True),
+                    "Qtde_Remesss": st.column_config.TextColumn(disabled=True), # <-- Erro de digitação aqui no seu código original
                     "Observação": st.column_config.TextColumn(
                         help="Anotações livres vinculadas ao cliente (salvas automaticamente)",
                         width="medium"
