@@ -9,7 +9,7 @@ from pathlib import Path
 import unicodedata
 import re
 import io
-import requests  # <<< ADICIONADO PARA MELHORAR A LEITURA DA URL
+import requests  # Importado na correção anterior
 
 # 2) CONFIGURAÇÕES INICIAIS
 st.set_page_config(layout="wide")
@@ -79,22 +79,33 @@ def obs_salvar(conn, cliente_display: str, observacao: str):
         )
     conn.commit()
 
+# <<< FUNÇÃO DE IMPORTAR CSV (CORRIGIDA PARA ERRO DE ENCODING) >>>
 def obs_importar_csv(conn, file_bytes: bytes):
-    # Decodificar os bytes lidos do upload
+    # Decodificar os bytes lidos do upload (aqui estava o erro)
+    decoded_content = ""
     try:
         decoded_content = file_bytes.decode('utf-8')
     except UnicodeDecodeError:
-        decoded_content = file_bytes.decode('latin1')
-        
+        try:
+            decoded_content = file_bytes.decode('latin1')
+        except Exception as e:
+            st.error(f"Não foi possível decodificar o CSV de backup (nem UTF-8, nem Latin1): {e}")
+            return
+            
+    # Ler o conteúdo da string decodificada
     df = pd.read_csv(io.StringIO(decoded_content), dtype=str).fillna("")
     
     req_cols = {"cliente_display", "observacao"}
     if not req_cols.issubset(set(map(str.lower, df.columns.str.lower()))):
         st.error("CSV de importação deve conter as colunas: cliente_display, observacao")
         return
+        
     cols = {c.lower(): c for c in df.columns}
+    count = 0
     for _, row in df.iterrows():
         obs_salvar(conn, row[cols["cliente_display"]], row[cols["observacao"]])
+        count += 1
+    st.sidebar.success(f"{count} observações importadas.") # Mensagem de sucesso melhorada
 
 def obs_exportar_csv(conn) -> bytes:
     df = obs_listar(conn)
@@ -105,7 +116,7 @@ def obs_exportar_csv(conn) -> bytes:
     return out.getvalue().encode("utf-8") # Exporta sempre como UTF-8
 
 # 6) CARGA E PROCESSAMENTO DE DADOS
-# <<< FUNÇÃO MODIFICADA PARA CORRIGIR O ERRO DE ENCODING >>>
+# <<< FUNÇÃO DE CARREGAR DADOS (CORRIGIDA PARA ERRO DE ENCODING) >>>
 @st.cache_data(ttl=300)
 def load_data_from_url(url):
     try:
@@ -124,11 +135,10 @@ def load_data_from_url(url):
                 # Se falhar, tenta Latin1 (comum no Brasil)
                 decoded_data = content_bytes.decode('latin1')
             except Exception as e_decode:
-                st.error(f"Erro ao decodificar o arquivo. Nem UTF-8 nem Latin1 funcionaram. Erro: {e_decode}")
+                st.error(f"Erro ao decodificar o arquivo do Drive. Nem UTF-8 nem Latin1 funcionaram. Erro: {e_decode}")
                 return pd.DataFrame(), "Erro na decodificação"
 
         # 3. Ler o conteúdo (string) decodificado com pandas
-        # Usar io.StringIO para tratar a string como se fosse um arquivo
         df = pd.read_csv(io.StringIO(decoded_data))
             
         update_time = f"**{datetime.now().strftime('%d/%m/%Y às %H:%M')}** (dados CSV do Google Drive)"
@@ -245,8 +255,10 @@ if raw_df is not None and not raw_df.empty:
         conn = get_db_conn()
         up_file = st.sidebar.file_uploader("Restaurar observações (CSV)", type=["csv"])
         if up_file is not None:
+            # A função obs_importar_csv agora trata o encoding
             obs_importar_csv(conn, up_file.read())
-            st.sidebar.success("Observações importadas com sucesso.")
+            # A mensagem de sucesso foi movida para dentro da função
+            
         down_bytes = obs_exportar_csv(conn)
         st.sidebar.download_button("Baixar observações (CSV)", data=down_bytes, file_name="observacoes_clientes.csv", mime="text/csv")
 
@@ -330,7 +342,7 @@ if raw_df is not None and not raw_df.empty:
                 column_config={
                     "Cliente": st.column_config.TextColumn(disabled=True),
                     "Valor_Total": st.column_config.TextColumn(disabled=True),
-                    "Qtde_Remesss": st.column_config.TextColumn(disabled=True), # <-- Erro de digitação aqui no seu código original
+                    "Qtde_Remessas": st.column_config.TextColumn(disabled=True), # <<< CORRIGIDO O ERRO DE DIGITAÇÃO AQUI
                     "Observação": st.column_config.TextColumn(
                         help="Anotações livres vinculadas ao cliente (salvas automaticamente)",
                         width="medium"
