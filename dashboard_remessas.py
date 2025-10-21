@@ -20,6 +20,9 @@ URL_DOWNLOAD_DIRETO = f"https.drive.google.com/uc?export=download&id={ID_ARQUIVO
 LOGO_URL = "https.raw.githubusercontent.com/rodneirac/BIremessas/main/logo.png"
 
 # 4) CARGA E PROCESSAMENTO DE DADOS
+# ==============================================================================
+# <<< CORRIGIDO PARA TRATAR O 'BOM' (\ufeff) COM 'utf-8-sig' >>>
+# ==============================================================================
 @st.cache_data(ttl=300)
 def load_data_from_url(url):
     """Baixa e lê o CSV do Google Drive, tratando o encoding."""
@@ -30,14 +33,17 @@ def load_data_from_url(url):
 
         decoded_data = ""
         try:
-            decoded_data = content_bytes.decode('utf-8')
+            # 1. Tenta 'utf-8-sig' PRIMEIRO. Isso remove o BOM (\ufeff).
+            decoded_data = content_bytes.decode('utf-8-sig')
         except UnicodeDecodeError:
             try:
+                # 2. Se falhar (o que é improvável agora), tenta latin1.
                 decoded_data = content_bytes.decode('latin1')
             except Exception as e_decode:
-                st.error(f"Erro ao decodificar o arquivo do Drive. Nem UTF-8 nem Latin1 funcionaram. Erro: {e_decode}")
+                st.error(f"Erro ao decodificar o arquivo do Drive. Nem UTF-8-SIG nem Latin1 funcionaram. Erro: {e_decode}")
                 return pd.DataFrame(), "Erro na decodificação"
 
+        # 4. Ler o conteúdo (string) decodificado com pandas
         df = pd.read_csv(io.StringIO(decoded_data))
         
         update_time = f"**{datetime.now().strftime('%d/%m/%Y às %H:%M')}** (dados CSV do Google Drive)"
@@ -67,10 +73,12 @@ def process_data(df_bruto):
         }
         
         colunas_necessarias_csv = list(colunas_mapeadas.keys())
+        # A verificação de colunas agora deve funcionar, pois "BASE" será "BASE"
         colunas_faltando = [col for col in colunas_necessarias_csv if col not in df.columns]
         
         if colunas_faltando:
             st.error(f"Erro no formato do CSV. Colunas não encontradas: {', '.join(colunas_faltando)}")
+            st.info(f"Colunas encontradas no CSV: {', '.join(df.columns)}")
             return pd.DataFrame()
 
         df = df.rename(columns=colunas_mapeadas)
@@ -98,11 +106,7 @@ st.title("Dashboard Remessas a Faturar")
 raw_df, update_info = load_data_from_url(URL_DOWNLOAD_DIRETO)
 st.caption(f"Dados atualizados em: {update_info}")
 
-# ==============================================================================
-# <<< ADICIONE ESTAS DUAS LINHAS PARA DEBUGAR >>>
-st.subheader("Debug: Dados Brutos Baixados (raw_df)")
-st.dataframe(raw_df)
-# ==============================================================================
+# Linhas de debug removidas
 
 if raw_df is not None and not raw_df.empty:
     df = process_data(raw_df)
