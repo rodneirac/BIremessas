@@ -20,12 +20,9 @@ URL_DOWNLOAD_DIRETO = f"https.drive.google.com/uc?export=download&id={ID_ARQUIVO
 LOGO_URL = "https.raw.githubusercontent.com/rodneirac/BIremessas/main/logo.png"
 
 # 4) CARGA E PROCESSAMENTO DE DADOS
-# ==============================================================================
-# <<< CORRIGIDO PARA TRATAR O 'BOM' (\ufeff) COM 'utf-8-sig' >>>
-# ==============================================================================
 @st.cache_data(ttl=300)
 def load_data_from_url(url):
-    """Baixa e lê o CSV do Google Drive, tratando o encoding."""
+    """Baixa e lê o CSV do Google Drive, tratando o encoding (utf-8-sig)."""
     try:
         response = requests.get(url) 
         response.raise_for_status()
@@ -33,17 +30,16 @@ def load_data_from_url(url):
 
         decoded_data = ""
         try:
-            # 1. Tenta 'utf-8-sig' PRIMEIRO. Isso remove o BOM (\ufeff).
+            # Tenta 'utf-8-sig' para remover o caractere BOM (\ufeff)
             decoded_data = content_bytes.decode('utf-8-sig')
         except UnicodeDecodeError:
             try:
-                # 2. Se falhar (o que é improvável agora), tenta latin1.
+                # Plano B
                 decoded_data = content_bytes.decode('latin1')
             except Exception as e_decode:
                 st.error(f"Erro ao decodificar o arquivo do Drive. Nem UTF-8-SIG nem Latin1 funcionaram. Erro: {e_decode}")
                 return pd.DataFrame(), "Erro na decodificação"
 
-        # 4. Ler o conteúdo (string) decodificado com pandas
         df = pd.read_csv(io.StringIO(decoded_data))
         
         update_time = f"**{datetime.now().strftime('%d/%m/%Y às %H:%M')}** (dados CSV do Google Drive)"
@@ -57,38 +53,48 @@ def load_data_from_url(url):
         st.error(f"Erro inesperado ao carregar dados da URL: {e}")
         return pd.DataFrame(), "Erro na atualização (Geral)"
 
+# ==============================================================================
+# <<< ESTA É A FUNÇÃO QUE PRECISA ESTAR CORRETA >>>
+# ==============================================================================
 def process_data(df_bruto):
     """Processa o DF bruto para o formato esperado pelo dashboard."""
     try:
         df = df_bruto.copy()
 
+        # Verifique se este mapeamento está IDÊNTICO no seu código
         colunas_mapeadas = {
             "BASE": "Base",
             "Descricao2": "Descricao",
             "Data_Ocorrencia2": "Data Ocorrencia",
             "VL_VALOR": "Valor",
-            "NM_CLIENTE2": "Cliente",
+            "NM_CLIENTE2": "Cliente",  # <<< ESTA LINHA É A CAUSA PROVÁVEL DO ERRO
             "Condicao_Pagto_SAP": "Cond Pagto SAP",
             "NU_DIA_CORTE_FATURAMENTO": "Dia Corte Fat."
         }
         
         colunas_necessarias_csv = list(colunas_mapeadas.keys())
-        # A verificação de colunas agora deve funcionar, pois "BASE" será "BASE"
         colunas_faltando = [col for col in colunas_necessarias_csv if col not in df.columns]
         
         if colunas_faltando:
             st.error(f"Erro no formato do CSV. Colunas não encontradas: {', '.join(colunas_faltando)}")
-            st.info(f"Colunas encontradas no CSV: {', '.join(df.columns)}")
+            st.info(f"Colunas encontradas no CSV (verifique espaços/acentos): {', '.join(df.columns)}")
             return pd.DataFrame()
 
+        # Renomeia as colunas
         df = df.rename(columns=colunas_mapeadas)
+        
+        # Seleciona apenas as colunas que foram renomeadas
         colunas_esperadas = list(colunas_mapeadas.values())
         df = df[colunas_esperadas]
 
         # Conversões
         df["Data Ocorrencia"] = pd.to_datetime(df["Data Ocorrencia"], format='%m/%d/%Y', errors="coerce")
         df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
-        df.dropna(subset=["Data Ocorrencia", "Valor", "Cliente"], inplace=True)
+        
+        # A linha abaixo é a que deu o erro
+        # Ela falha se "Cliente" não foi criado na etapa de renomeação
+        df.dropna(subset=["Data Ocorrencia", "Valor", "Cliente"], inplace=True) 
+        
         df["Mês"] = df["Data Ocorrencia"].dt.to_period("M").astype(str)
         
         # Regra de negócio
@@ -106,10 +112,15 @@ st.title("Dashboard Remessas a Faturar")
 raw_df, update_info = load_data_from_url(URL_DOWNLOAD_DIRETO)
 st.caption(f"Dados atualizados em: {update_info}")
 
-# Linhas de debug removidas
-
 if raw_df is not None and not raw_df.empty:
     df = process_data(raw_df)
+    
+    # Adicionado um "st.dataframe(df)" para debug, caso continue vazio
+    if df.empty:
+        st.info("Atenção: Os dados foram carregados, mas o processamento (filtros, regras) resultou em uma tabela vazia.")
+        # st.subheader("Dados Brutos (após processamento inicial)")
+        # st.dataframe(raw_df) # Descomente esta linha se precisar ver o dado bruto
+
     if not df.empty:
         # --------- Filtros ---------
         st.sidebar.header("Filtros")
@@ -167,76 +178,82 @@ if raw_df is not None and not raw_df.empty:
             df_filtrado = df_filtrado[df_filtrado['Descricao'].isin(st.session_state['desc_selection'])]
         if st.session_state['mes_selection']:
             df_filtrado = df_filtrado[df_filtrado['Mês'].isin(st.session_state['mes_selection'])]
+        
+        if df_filtrado.empty:
+            st.warning("Nenhum dado encontrado para os filtros selecionados.")
+        else:
+            # --------- KPIs ---------
+            total_remessas = len(df_filtrado)
+            valor_total = df_filtrado["Valor"].sum()
+            valor_medio = df_filtrado["Valor"].mean() if total_remessas > 0 else 0
 
-        # --------- KPIs ---------
-        total_remessas = len(df_filtrado)
-        valor_total = df_filtrado["Valor"].sum()
-        valor_medio = df_filtrado["Valor"].mean() if total_remessas > 0 else 0
+            st.markdown("### Indicadores Gerais")
+            kpi_cols = st.columns(3)
+            kpi_cols[0].metric("Qtde. Remessas", f"{total_remessas:n}")
+            kpi_cols[1].metric("Valor Total (R$)", locale.format_string('%.2f', valor_total, grouping=True))
+            kpi_cols[2].metric("Valor Médio (R$)", locale.format_string('%.2f', valor_medio, grouping=True))
 
-        st.markdown("### Indicadores Gerais")
-        kpi_cols = st.columns(3)
-        kpi_cols[0].metric("Qtde. Remessas", f"{total_remessas:n}")
-        kpi_cols[1].metric("Valor Total (R$)", locale.format_string('%.2f', valor_total, grouping=True))
-        kpi_cols[2].metric("Valor Médio (R$)", locale.format_string('%.2f', valor_medio, grouping=True))
+            st.markdown("---")
 
-        st.markdown("---")
+            # --------- GRÁFICOS ---------
+            cA, cB = st.columns(2)
+            with cA:
+                st.subheader("Evolução de Valores por Mês")
+                agrupado_mes = df_filtrado.groupby("Mês").agg({"Valor": "sum"}).reset_index().sort_values("Mês")
+                fig_bar = px.bar(agrupado_mes, x="Mês", y="Valor", text_auto='.2s', labels={"Valor": "Valor (R$)", "Mês": "Mês de Referência"})
+                fig_bar.update_traces(textposition="outside")
+                st.plotly_chart(fig_bar, use_container_width=True)
 
-        # --------- GRÁFICOS ---------
-        cA, cB = st.columns(2)
-        with cA:
-            st.subheader("Evolução de Valores por Mês")
-            agrupado_mes = df_filtrado.groupby("Mês").agg({"Valor": "sum"}).reset_index().sort_values("Mês")
-            fig_bar = px.bar(agrupado_mes, x="Mês", y="Valor", text_auto='.2s', labels={"Valor": "Valor (R$)", "Mês": "Mês de Referência"})
-            fig_bar.update_traces(textposition="outside")
-            st.plotly_chart(fig_bar, use_container_width=True)
+            with cB:
+                st.subheader("Distribuição por Descrição")
+                agrupado_desc = df_filtrado.groupby("Descricao").agg({"Valor": "sum"}).reset_index()
+                top_n = 10
+                if len(agrupado_desc) > top_n:
+                    agrupado_desc = agrupado_desc.sort_values("Valor", ascending=False)
+                    outros = pd.DataFrame({'Descricao': ['Outros'], 'Valor': [agrupado_desc.iloc[top_n:]['Valor'].sum()]})
+                    agrupado_desc = pd.concat([agrupado_desc.iloc[:top_n], outros], ignore_index=True)
+                fig_pie = px.pie(agrupado_desc, names="Descricao", values="Valor", hole=.3)
+                fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+                st.plotly_chart(fig_pie, use_container_width=True)
 
-        with cB:
-            st.subheader("Distribuição por Descrição")
-            agrupado_desc = df_filtrado.groupby("Descricao").agg({"Valor": "sum"}).reset_index()
-            top_n = 10
-            if len(agrupado_desc) > top_n:
-                agrupado_desc = agrupado_desc.sort_values("Valor", ascending=False)
-                outros = pd.DataFrame({'Descricao': ['Outros'], 'Valor': [agrupado_desc.iloc[top_n:]['Valor'].sum()]})
-                agrupado_desc = pd.concat([agrupado_desc.iloc[:top_n], outros], ignore_index=True)
-            fig_pie = px.pie(agrupado_desc, names="Descricao", values="Valor", hole=.3)
-            fig_pie.update_traces(textposition='inside', textinfo='percent+label')
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.markdown("---")
 
-        st.markdown("---")
+            st.subheader("Valor Total por Base")
+            agrupado_base = df_filtrado.groupby("Base").agg({"Valor": "sum"}).reset_index().sort_values("Valor", ascending=False)
+            fig_base = px.bar(agrupado_base, x="Base", y="Valor", title="Faturamento por Base", text_auto='.2s')
+            fig_base.update_layout(xaxis={'categoryorder': 'total descending'})
+            st.plotly_chart(fig_base, use_container_width=True)
 
-        st.subheader("Valor Total por Base")
-        agrupado_base = df_filtrado.groupby("Base").agg({"Valor": "sum"}).reset_index().sort_values("Valor", ascending=False)
-        fig_base = px.bar(agrupado_base, x="Base", y="Valor", title="Faturamento por Base", text_auto='.2s')
-        fig_base.update_layout(xaxis={'categoryorder': 'total descending'})
-        st.plotly_chart(fig_base, use_container_width=True)
+            # --------- RESUMO POR CLIENTE (APENAS VISUALIZAÇÃO) ---------
+            with st.expander("Ver resumo por cliente", expanded=False):
+                st.markdown("#### Somatório por Cliente (com base nos filtros aplicados)")
+                resumo_cliente = df_filtrado.groupby("Cliente").agg(
+                    Valor_Total=('Valor', 'sum'),
+                    Qtde_Remessas=('Base', 'count')
+                ).reset_index().sort_values("Valor_Total", ascending=False)
 
-        # --------- RESUMO POR CLIENTE (APENAS VISUALIZAÇÃO) ---------
-        with st.expander("Ver resumo por cliente", expanded=False):
-            st.markdown("#### Somatório por Cliente (com base nos filtros aplicados)")
-            resumo_cliente = df_filtrado.groupby("Cliente").agg(
-                Valor_Total=('Valor', 'sum'),
-                Qtde_Remessas=('Base', 'count')
-            ).reset_index().sort_values("Valor_Total", ascending=False)
+                # Formatação para exibição
+                resumo_cliente['Valor_Total_Fmt'] = resumo_cliente['Valor_Total'].apply(
+                    lambda x: locale.format_string('R$ %.2f', x, grouping=True)
+                )
+                resumo_cliente['Qtde_Remessas_Fmt'] = resumo_cliente['Qtde_Remessas'].apply(
+                    lambda x: locale.format_string('%d', x, grouping=True)
+                )
+                
+                # Exibir como tabela simples (st.dataframe)
+                st.dataframe(
+                    resumo_cliente[["Cliente", "Valor_Total_Fmt", "Qtde_Remessas_Fmt"]],
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Cliente": "Cliente",
+                        "Valor_Total_Fmt": "Valor Total (R$)",
+                        "Qtde_Remessas_Fmt": "Qtde. Remessas"
+                    }
+                )
 
-            # Formatação para exibição
-            resumo_cliente['Valor_Total_Fmt'] = resumo_cliente['Valor_Total'].apply(
-                lambda x: locale.format_string('R$ %.2f', x, grouping=True)
-            )
-            resumo_cliente['Qtde_Remessas_Fmt'] = resumo_cliente['Qtde_Remessas'].apply(
-                lambda x: locale.format_string('%d', x, grouping=True)
-            )
-            
-            # Exibir como tabela simples (st.dataframe)
-            st.dataframe(
-                resumo_cliente[["Cliente", "Valor_Total_Fmt", "Qtde_Remessas_Fmt"]],
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Cliente": "Cliente",
-                    "Valor_Total_Fmt": "Valor Total (R$)",
-                    "Qtde_Remessas_Fmt": "Qtde. Remessas"
-                }
-            )
-
+elif raw_df is not None and raw_df.empty:
+    st.warning("O arquivo do Google Drive foi carregado, mas está vazio (não contém linhas de dados).")
 else:
+    # Este 'else' captura o 'raw_df is None' que pode vir de um erro de carregamento
     st.warning("Não há dados disponíveis para exibição ou ocorreu um erro no carregamento.")
