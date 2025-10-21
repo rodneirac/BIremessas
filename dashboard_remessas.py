@@ -5,7 +5,7 @@ import plotly.express as px
 from datetime import datetime
 import locale
 import io
-import requests # <<< ESSENCIAL PARA CORRIGIR O ERRO DE ENCODING
+import requests 
 
 # 2) CONFIGURAÇÕES INICIAIS
 st.set_page_config(layout="wide")
@@ -20,32 +20,24 @@ URL_DOWNLOAD_DIRETO = f"https.drive.google.com/uc?export=download&id={ID_ARQUIVO
 LOGO_URL = "https.raw.githubusercontent.com/rodneirac/BIremessas/main/logo.png"
 
 # 4) CARGA E PROCESSAMENTO DE DADOS
-# ==============================================================================
-# <<< ESTA É A FUNÇÃO CORRIGIDA PARA O ERRO 'UnicodeDecodeError' >>>
-# ==============================================================================
 @st.cache_data(ttl=300)
 def load_data_from_url(url):
     """Baixa e lê o CSV do Google Drive, tratando o encoding."""
     try:
-        # 1. Baixar o conteúdo da URL usando requests
-        response = requests.get(url)
-        response.raise_for_status()  # Lança um erro se o download falhar
+        response = requests.get(url) 
+        response.raise_for_status()
         content_bytes = response.content
 
-        # 2. Tentar decodificar o conteúdo (bytes)
         decoded_data = ""
         try:
-            # Tenta UTF-8 primeiro
             decoded_data = content_bytes.decode('utf-8')
         except UnicodeDecodeError:
             try:
-                # 3. Se falhar, tenta Latin1 (que corrige o 'byte 0xba')
                 decoded_data = content_bytes.decode('latin1')
             except Exception as e_decode:
                 st.error(f"Erro ao decodificar o arquivo do Drive. Nem UTF-8 nem Latin1 funcionaram. Erro: {e_decode}")
                 return pd.DataFrame(), "Erro na decodificação"
 
-        # 4. Ler o conteúdo (string) decodificado com pandas
         df = pd.read_csv(io.StringIO(decoded_data))
         
         update_time = f"**{datetime.now().strftime('%d/%m/%Y às %H:%M')}** (dados CSV do Google Drive)"
@@ -64,7 +56,6 @@ def process_data(df_bruto):
     try:
         df = df_bruto.copy()
 
-        # Mapeamento das colunas do CSV para as colunas do dashboard
         colunas_mapeadas = {
             "BASE": "Base",
             "Descricao2": "Descricao",
@@ -104,9 +95,14 @@ def process_data(df_bruto):
 st.image(LOGO_URL, width=200)
 st.title("Dashboard Remessas a Faturar")
 
-# A chamada da função é a mesma, mas a função interna agora é robusta
 raw_df, update_info = load_data_from_url(URL_DOWNLOAD_DIRETO)
 st.caption(f"Dados atualizados em: {update_info}")
+
+# ==============================================================================
+# <<< ADICIONE ESTAS DUAS LINHAS PARA DEBUGAR >>>
+st.subheader("Debug: Dados Brutos Baixados (raw_df)")
+st.dataframe(raw_df)
+# ==============================================================================
 
 if raw_df is not None and not raw_df.empty:
     df = process_data(raw_df)
