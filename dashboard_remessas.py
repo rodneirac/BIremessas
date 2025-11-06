@@ -101,8 +101,7 @@ def obs_exportar_csv(conn) -> bytes:
 @st.cache_data(ttl=300)
 def load_data_from_url(url):
     try:
-        # AJUSTE: Removido skiprows=3 e header=None para ler a planilha
-        # com cabeçalho na primeira linha.
+        # Ajustado para ler planilha com cabeçalho na primeira linha
         df = pd.read_excel(url, engine="openpyxl")
         update_time = f"**{datetime.now().strftime('%d/%m/%Y às %H:%M')}** (dados do Google Drive)"
         return df, update_time
@@ -115,7 +114,7 @@ def process_data(df_bruto):
     try:
         df = df_bruto.copy()
 
-        # AJUSTE: Mapeamento das novas colunas para as colunas esperadas pelo app
+        # Mapeamento das novas colunas para as colunas esperadas pelo app
         mapa_colunas = {
             "BASE": "Base",
             "Descricao2": "Descricao",
@@ -129,10 +128,7 @@ def process_data(df_bruto):
         # Renomear colunas
         df.rename(columns=mapa_colunas, inplace=True)
 
-        # Colunas que o app *realmente* usa
         colunas_esperadas = ["Base", "Descricao", "Data Ocorrencia", "Valor", "Cliente", "Cond Pagto SAP", "Dia Corte Fat."]
-        
-        # Verificar se as colunas essenciais estão presentes após o rename
         colunas_presentes = set(df.columns)
         colunas_faltantes = [col for col in colunas_esperadas if col not in colunas_presentes]
         
@@ -143,7 +139,12 @@ def process_data(df_bruto):
 
         df["Data Ocorrencia"] = pd.to_datetime(df["Data Ocorrencia"], errors="coerce")
         df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
-        df.dropna(subset=["Data Ocorrencia", "Valor", "Cliente"], inplace=True)
+        
+        # *** AJUSTE REALIZADO AQUI ***
+        # Agora, só remove linhas se a Data ou o Valor estiverem faltando.
+        # Linhas com Cliente em branco serão mantidas.
+        df.dropna(subset=["Data Ocorrencia", "Valor"], inplace=True)
+        
         df["Mês"] = df["Data Ocorrencia"].dt.to_period("M").astype(str)
         
         # Lógica de negócio mantida
