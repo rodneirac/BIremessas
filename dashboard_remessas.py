@@ -18,7 +18,7 @@ except locale.Error:
     st.warning("Localidade 'pt_BR.UTF-8' não encontrada...")
 
 # 3) CONSTANTES
-ID_ARQUIVO_DRIVE = "1wqnGdfpCE5Go7wlITqtfxrxpHxVpTzCT"
+ID_ARQUIVO_DRIVE = "1wqnGdfpCE5Go7wlITqtfxrxpHxVpTzCT" # Lembre-se de atualizar se o ID mudar
 URL_DOWNLOAD_DIRETO = f"https://drive.google.com/uc?export=download&id={ID_ARQUIVO_DRIVE}"
 LOGO_URL = "https://raw.githubusercontent.com/rodneirac/BIremessas/main/logo.png"
 
@@ -44,10 +44,10 @@ def get_db_conn():
     conn = sqlite3.connect(DB_PATH.as_posix(), check_same_thread=False)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS obs_clientes_k (
-            cliente_key   TEXT PRIMARY KEY,
+            cliente_key     TEXT PRIMARY KEY,
             cliente_display TEXT,
-            observacao    TEXT DEFAULT '',
-            updated_at    TEXT
+            observacao      TEXT DEFAULT '',
+            updated_at      TEXT
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_display ON obs_clientes_k (cliente_display)")
@@ -101,7 +101,9 @@ def obs_exportar_csv(conn) -> bytes:
 @st.cache_data(ttl=300)
 def load_data_from_url(url):
     try:
-        df = pd.read_excel(url, engine="openpyxl", skiprows=3, header=None)
+        # AJUSTE: Removido skiprows=3 e header=None para ler a planilha
+        # com cabeçalho na primeira linha.
+        df = pd.read_excel(url, engine="openpyxl")
         update_time = f"**{datetime.now().strftime('%d/%m/%Y às %H:%M')}** (dados do Google Drive)"
         return df, update_time
     except Exception as e:
@@ -112,18 +114,39 @@ def load_data_from_url(url):
 def process_data(df_bruto):
     try:
         df = df_bruto.copy()
-        df = df.drop(columns=[1])  # remove coluna em branco
-        colunas_corretas = ["Base", "Descricao", "Data Ocorrencia", "Valor", "Cliente", "Cond Pagto SAP", "Dia Corte Fat."]
-        if len(df.columns) == len(colunas_corretas):
-            df.columns = colunas_corretas
-        else:
-            st.error(f"O arquivo lido tem {len(df.columns)} colunas (esperado: {len(colunas_corretas)}).")
+
+        # AJUSTE: Mapeamento das novas colunas para as colunas esperadas pelo app
+        mapa_colunas = {
+            "BASE": "Base",
+            "Descricao2": "Descricao",
+            "Data_Ocorrencia2": "Data Ocorrencia",
+            "VL_VALOR": "Valor",
+            "NM_CLIENTE2": "Cliente",
+            "Condicao_Pagto_SAP": "Cond Pagto SAP",
+            "NU_DIA_CORTE_FATURAMENTO": "Dia Corte Fat."
+        }
+        
+        # Renomear colunas
+        df.rename(columns=mapa_colunas, inplace=True)
+
+        # Colunas que o app *realmente* usa
+        colunas_esperadas = ["Base", "Descricao", "Data Ocorrencia", "Valor", "Cliente", "Cond Pagto SAP", "Dia Corte Fat."]
+        
+        # Verificar se as colunas essenciais estão presentes após o rename
+        colunas_presentes = set(df.columns)
+        colunas_faltantes = [col for col in colunas_esperadas if col not in colunas_presentes]
+        
+        if colunas_faltantes:
+            st.error(f"O arquivo lido não contém as colunas esperadas. Faltando: {', '.join(colunas_faltantes)}")
+            st.info(f"Colunas encontradas no arquivo (originais): {', '.join(df_bruto.columns)}")
             return pd.DataFrame()
 
         df["Data Ocorrencia"] = pd.to_datetime(df["Data Ocorrencia"], errors="coerce")
         df["Valor"] = pd.to_numeric(df["Valor"], errors="coerce")
         df.dropna(subset=["Data Ocorrencia", "Valor", "Cliente"], inplace=True)
         df["Mês"] = df["Data Ocorrencia"].dt.to_period("M").astype(str)
+        
+        # Lógica de negócio mantida
         df.loc[df['Cond Pagto SAP'].astype(str) == 'V029', 'Cliente'] = 'GRUPO MRV ENGENHARIA SA'
         return df
     except Exception as e:
